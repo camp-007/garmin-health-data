@@ -247,6 +247,22 @@ class GarminDataRegistry:
             # ``GarminExtractor.extract_fit_activities``, which sources the activity
             # ID list from the ACTIVITIES_LIST output.
             GarminDataType(
+                "ACTIVITY_HR_ZONES",
+                "get_activity_hr_zones",
+                APIMethodTimeParam.PER_ACTIVITY,
+                "/activity-service/activity/{activity_id}/hrTimeInZones",
+                "Per-activity heart-rate zone durations and lower BPM boundaries.",
+                "💓",
+            ),
+            GarminDataType(
+                "ACTIVITY_POWER_ZONES",
+                "get_activity_power_zones",
+                APIMethodTimeParam.PER_ACTIVITY,
+                "/activity-service/activity/{activity_id}/powerTimeInZones",
+                "Per-activity power zone durations and lower watt boundaries.",
+                "⚡",
+            ),
+            GarminDataType(
                 "EXERCISE_SETS",
                 "get_activity_exercise_sets",
                 APIMethodTimeParam.PER_ACTIVITY,

@@ -1123,6 +1123,10 @@ class GarminExtractor:
         want_multisport = (
             self.data_types is None or "MULTISPORT_CHILDREN" in self.data_types
         )
+        want_hr_zones = self.data_types is None or "ACTIVITY_HR_ZONES" in self.data_types
+        want_power_zones = (
+            self.data_types is None or "ACTIVITY_POWER_ZONES" in self.data_types
+        )
 
         for activity in activities:
             activity_id = activity["activityId"]
@@ -1210,6 +1214,22 @@ class GarminExtractor:
                 if children_file:
                     downloaded_files.append(children_file)
 
+            for requested, data_type, method in (
+                (want_hr_zones, "ACTIVITY_HR_ZONES", self.garmin_client.get_activity_hr_zones),
+                (
+                    want_power_zones,
+                    "ACTIVITY_POWER_ZONES",
+                    self.garmin_client.get_activity_power_zones,
+                ),
+            ):
+                if requested:
+                    time.sleep(0.1)
+                    zone_file = self._extract_activity_zones(
+                        activity_id, timestamp, data_type, method
+                    )
+                    if zone_file:
+                        downloaded_files.append(zone_file)
+
             # Rate limiting between activities.
             time.sleep(0.1)
 
@@ -1218,6 +1238,35 @@ class GarminExtractor:
             f"files saved to {self.ingest_dir}."
         )
         return downloaded_files
+
+    def _extract_activity_zones(
+        self, activity_id: int, timestamp: str, data_type: str, method: Callable
+    ) -> Optional[Path]:
+        """Fetch and save a dedicated activity-zone chart response."""
+        try:
+            data = _with_retries(method, activity_id)
+        except Exception as e:
+            click.secho(
+                f"Warning: Failed to fetch {data_type} for activity "
+                f"{activity_id}: {e}.",
+                fg="yellow",
+            )
+            self.failures.append(
+                ExtractionFailure(
+                    data_type=data_type,
+                    date="",
+                    activity_id=str(activity_id),
+                    error=f"{type(e).__name__}: {e}",
+                )
+            )
+            return None
+        if not isinstance(data, list) or not data:
+            return None
+        filename = f"{self.user_id}_{data_type}_{activity_id}_{timestamp}.json"
+        filepath = self.ingest_dir / filename
+        with open(filepath, "w", encoding="utf-8") as file_handle:
+            json.dump(data, file_handle, indent=2)
+        return filepath
 
     def _extract_exercise_sets(
         self, activity_id: int, timestamp: str
@@ -1500,7 +1549,13 @@ def extract(
             activity_files = []
             if data_types is None or (
                 data_types
-                and {"ACTIVITY", "EXERCISE_SETS", "MULTISPORT_CHILDREN"}
+                and {
+                    "ACTIVITY",
+                    "EXERCISE_SETS",
+                    "MULTISPORT_CHILDREN",
+                    "ACTIVITY_HR_ZONES",
+                    "ACTIVITY_POWER_ZONES",
+                }
                 & set(data_types)
             ):
                 if progress_callback:

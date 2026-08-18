@@ -38,6 +38,7 @@ from garmin_health_data.models import (
     ActivityPath,
     ActivitySplitMetric,
     ActivityTsMetric,
+    ActivityZone,
     BodyBattery,
     BodyComposition,
     BreathingDisruption,
@@ -233,6 +234,8 @@ class GarminProcessor(Processor):
                 # After ACTIVITIES_LIST so the parent multi_sport row exists before
                 # its legs (which FK-reference it via parent_activity_id) are inserted.
                 ("MULTISPORT_CHILDREN", self._process_multisport_children),
+                ("ACTIVITY_HR_ZONES", self._process_activity_hr_zones),
+                ("ACTIVITY_POWER_ZONES", self._process_activity_power_zones),
                 ("EXERCISE_SETS", self._process_exercise_sets),
                 ("BODY_COMPOSITION", self._process_body_composition),
                 ("RUNNING_TOLERANCE", self._process_running_tolerance),
@@ -1094,6 +1097,67 @@ class GarminProcessor(Processor):
             click.echo(
                 f"Processed {len(exercise_records)} strength exercise aggregates."
             )
+
+    def _process_activity_hr_zones(
+        self, file_path: Path, session: Session
+    ) -> None:
+        """Process a dedicated heart-rate zone chart response."""
+        self._process_activity_zones(file_path, session, "heart_rate", "bpm")
+
+    def _process_activity_power_zones(
+        self, file_path: Path, session: Session
+    ) -> None:
+        """Process a dedicated power zone chart response."""
+        self._process_activity_zones(file_path, session, "power", "watts")
+
+    def _process_activity_zones(
+        self,
+        file_path: Path,
+        session: Session,
+        zone_type: str,
+        boundary_unit: str,
+    ) -> None:
+        """Replace one activity's normalized zone rows from an API snapshot."""
+        match = re.match(
+            r"^\d+_ACTIVITY_(?:HR|POWER)_ZONES_(\d+)_", file_path.name
+        )
+        if not match:
+            raise ValueError(f"Cannot parse activity ID from {file_path.name}.")
+        activity_id = int(match.group(1))
+        if activity_id in self._skipped_activity_ids:
+            return
+        if session.get(Activity, activity_id) is None:
+            click.secho(
+                f"Warning: Skipping zones for missing activity {activity_id}.",
+                fg="yellow",
+            )
+            return
+        data = self._load_json_file(file_path)
+        if not isinstance(data, list):
+            raise ValueError(f"Zone response in {file_path.name} must be a list.")
+        records = []
+        for index, zone in enumerate(data, start=1):
+            if not isinstance(zone, dict):
+                continue
+            zone_number = zone.get("zoneNumber", index)
+            records.append(
+                ActivityZone(
+                    activity_id=activity_id,
+                    zone_type=zone_type,
+                    zone_number=int(zone_number),
+                    seconds_in_zone=zone.get("secsInZone"),
+                    low_boundary=zone.get("zoneLowBoundary"),
+                    boundary_unit=boundary_unit,
+                )
+            )
+        session.execute(
+            delete(ActivityZone).where(
+                ActivityZone.activity_id == activity_id,
+                ActivityZone.zone_type == zone_type,
+            )
+        )
+        if records:
+            session.add_all(records)
 
     def _process_exercise_sets(self, file_path: Path, session: Session):
         """

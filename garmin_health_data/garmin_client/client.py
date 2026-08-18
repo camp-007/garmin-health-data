@@ -958,6 +958,18 @@ class GarminClient:
         """
         return api.get_activity_exercise_sets(self, activity_id)
 
+    def get_activity_hr_zones(
+        self, activity_id: Any
+    ) -> Optional[List[Dict[str, Any]]]:
+        """See :func:`api.get_activity_hr_zones`."""
+        return api.get_activity_hr_zones(self, activity_id)
+
+    def get_activity_power_zones(
+        self, activity_id: Any
+    ) -> Optional[List[Dict[str, Any]]]:
+        """See :func:`api.get_activity_power_zones`."""
+        return api.get_activity_power_zones(self, activity_id)
+
     def get_personal_record(self) -> Dict[str, Any]:
         """
         See :func:`api.get_personal_record`.

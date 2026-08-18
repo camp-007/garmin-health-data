@@ -534,6 +534,31 @@ def get_activity_exercise_sets(
     return client._connectapi(url)
 
 
+def _get_activity_zones(
+    client: "GarminClient", activity_id: Any, zone_path: str
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch one activity-zone chart response."""
+    aid = int(activity_id)
+    if aid <= 0:
+        raise ValueError(f"activity_id must be a positive integer, got {activity_id}")
+    result = client._connectapi(f"{ACTIVITY_URL}/{aid}/{zone_path}")
+    return result if isinstance(result, list) and result else None
+
+
+def get_activity_hr_zones(
+    client: "GarminClient", activity_id: Any
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch heart-rate zone durations and boundaries for an activity."""
+    return _get_activity_zones(client, activity_id, "hrTimeInZones")
+
+
+def get_activity_power_zones(
+    client: "GarminClient", activity_id: Any
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch power zone durations and boundaries for an activity."""
+    return _get_activity_zones(client, activity_id, "powerTimeInZones")
+
+
 # ----------------------------------------------------------------------------------------
 # NO-DATE METADATA METHODS
 # ----------------------------------------------------------------------------------------

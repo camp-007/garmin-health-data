@@ -116,6 +116,22 @@ ON activity (user_id, start_ts DESC);
 CREATE INDEX IF NOT EXISTS activity_parent_activity_id_idx
 ON activity (parent_activity_id);
 
+-- Authoritative per-activity zone chart data from Garmin's dedicated endpoints.
+CREATE TABLE IF NOT EXISTS activity_zone (
+    activity_id BIGINT NOT NULL
+    , zone_type TEXT NOT NULL
+    , zone_number INTEGER NOT NULL
+    , seconds_in_zone FLOAT
+    , low_boundary FLOAT
+    , boundary_unit TEXT NOT NULL
+    , create_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    , update_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    , PRIMARY KEY (activity_id, zone_type, zone_number)
+    , FOREIGN KEY (activity_id) REFERENCES activity (activity_id) ON DELETE CASCADE
+    , CHECK (zone_type IN ('heart_rate', 'power'))
+    , CHECK (boundary_unit IN ('bpm', 'watts'))
+);
+
 -- Uniqueness of (user_id, start_ts) is enforced only for non-child activities. A
 -- multi-sport leg (parent_activity_id IS NOT NULL) may legitimately share a start
 -- instant with an independently-recorded standalone activity of the same event, so leg

@@ -392,6 +392,23 @@ class SupplementalActivityMetric(Base, UpsertBase):
     value = Column(Float)
 
 
+class ActivityZone(Base, UpsertBase):
+    """Authoritative per-activity heart-rate or power zone chart row."""
+
+    __tablename__ = "activity_zone"
+
+    activity_id = Column(
+        BigInteger,
+        ForeignKey("activity.activity_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    zone_type = Column(String, primary_key=True)
+    zone_number = Column(Integer, primary_key=True)
+    seconds_in_zone = Column(Float)
+    low_boundary = Column(Float)
+    boundary_unit = Column(String, nullable=False)
+
+
 class Sleep(Base, UpsertBase):
     """
     Sleep session data from Garmin Connect including sleep scores, duration, and quality
