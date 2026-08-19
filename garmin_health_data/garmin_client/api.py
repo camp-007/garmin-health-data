@@ -50,6 +50,9 @@ from .constants import (
     USER_SETTINGS_URL,
     USER_SUMMARY_CHART_URL,
     WEIGHT_RANGE_URL,
+    WORKOUTS_URL,
+    WORKOUT_SCHEDULE_URL,
+    CALENDAR_URL,
 )
 
 if TYPE_CHECKING:
@@ -58,6 +61,26 @@ if TYPE_CHECKING:
 
 _DATE_FORMAT_STR = "%Y-%m-%d"
 _DATE_FORMAT_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _json_response(response: Any) -> Any:
+    """Return JSON from a successful mutation, normalizing HTTP 204."""
+    if response.status_code == 204:
+        return {}
+    return response.json()
+
+
+def _validate_positive_int(value: Any, name: str) -> int:
+    """Validate an integer identifier without accepting booleans or zero."""
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"{name} must be a positive integer") from err
+    if result <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return result
 
 
 class ActivityDownloadFormat(Enum):
@@ -636,6 +659,108 @@ def get_user_profile(client: "GarminClient") -> Dict[str, Any]:
         birthday, and threshold metrics.
     """
     return client._connectapi(USER_SETTINGS_URL)
+
+
+# ----------------------------------------------------------------------------------------
+# STRUCTURED WORKOUT METHODS
+# ----------------------------------------------------------------------------------------
+
+
+def get_workouts(
+    client: "GarminClient", start: int = 0, limit: int = 100
+) -> List[Dict[str, Any]]:
+    """Return workout templates from the authenticated account."""
+    if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+        raise ValueError("start must be a non-negative integer")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+    return client._connectapi(
+        f"{WORKOUTS_URL}/workouts", params={"start": start, "limit": limit}
+    )
+
+
+def get_workout_by_id(client: "GarminClient", workout_id: Any) -> Dict[str, Any]:
+    """Return one workout template by Garmin workout ID."""
+    workout_id = _validate_positive_int(workout_id, "workout_id")
+    return client._connectapi(f"{WORKOUTS_URL}/workout/{workout_id}")
+
+
+def update_workout(
+    client: "GarminClient", workout_id: Any, workout: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Update an existing workout template in place."""
+    workout_id = _validate_positive_int(workout_id, "workout_id")
+    if not isinstance(workout, dict):
+        raise ValueError("workout must be a JSON object")
+    response = client._request(
+        "PUT", f"{WORKOUTS_URL}/workout/{workout_id}", json=workout
+    )
+    return _json_response(response)
+
+
+def delete_workout(client: "GarminClient", workout_id: Any) -> Dict[str, Any]:
+    """Delete a workout template from the workout library."""
+    workout_id = _validate_positive_int(workout_id, "workout_id")
+    response = client._request("DELETE", f"{WORKOUTS_URL}/workout/{workout_id}")
+    return _json_response(response)
+
+
+def upload_workout(client: "GarminClient", workout: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a workout template from a Garmin-compatible JSON object."""
+    if not isinstance(workout, dict):
+        raise ValueError("workout must be a JSON object")
+    response = client._request(
+        "POST", f"{WORKOUTS_URL}/workout", json=workout
+    )
+    return _json_response(response)
+
+
+def schedule_workout(
+    client: "GarminClient", workout_id: Any, date_str: str
+) -> Dict[str, Any]:
+    """Schedule an existing workout template on a Garmin calendar date."""
+    workout_id = _validate_positive_int(workout_id, "workout_id")
+    date_str = _validate_date_format(date_str, "date_str")
+    response = client._request(
+        "POST",
+        f"{WORKOUT_SCHEDULE_URL}/{workout_id}",
+        json={"date": date_str},
+    )
+    return _json_response(response)
+
+
+def get_scheduled_workouts(
+    client: "GarminClient", year: int, month: int
+) -> Dict[str, Any]:
+    """Return calendar entries for a year and one-indexed month."""
+    if isinstance(year, bool) or not isinstance(year, int) or year < 2000:
+        raise ValueError("year must be an integer of 2000 or later")
+    if isinstance(month, bool) or not isinstance(month, int) or not 1 <= month <= 12:
+        raise ValueError("month must be an integer between 1 and 12")
+    return client._connectapi(f"{CALENDAR_URL}/year/{year}/month/{month - 1}")
+
+
+def get_scheduled_workout_by_id(
+    client: "GarminClient", scheduled_workout_id: Any
+) -> Dict[str, Any]:
+    """Return one scheduled workout by schedule ID."""
+    scheduled_workout_id = _validate_positive_int(
+        scheduled_workout_id, "scheduled_workout_id"
+    )
+    return client._connectapi(f"{WORKOUT_SCHEDULE_URL}/{scheduled_workout_id}")
+
+
+def unschedule_workout(
+    client: "GarminClient", scheduled_workout_id: Any
+) -> Dict[str, Any]:
+    """Remove a workout occurrence from the calendar without deleting its template."""
+    scheduled_workout_id = _validate_positive_int(
+        scheduled_workout_id, "scheduled_workout_id"
+    )
+    response = client._request(
+        "DELETE", f"{WORKOUT_SCHEDULE_URL}/{scheduled_workout_id}"
+    )
+    return _json_response(response)
 
 
 # ----------------------------------------------------------------------------------------

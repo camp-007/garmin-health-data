@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "workout": {
+    "key": "poc-five-minute-easy-run",
+    "name": "POC - 5 Minute Easy Run",
+    "description": "Generic proof-of-concept workout for testing the workout CLI.",
+    "sport": "running",
+    "steps": [
+      {
+        "type": "interval",
+        "duration": {
+          "type": "time",
+          "seconds": 300
+        },
+        "target": {
+          "type": "open"
+        }
+      }
+    ]
+  }
+}

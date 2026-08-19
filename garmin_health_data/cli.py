@@ -2,6 +2,7 @@
 Command-line interface for garmin-health-data.
 """
 
+import json
 import logging
 import re
 from collections import OrderedDict
@@ -16,6 +17,7 @@ from garmin_health_data.__version__ import __version__
 from garmin_health_data.auth import (
     ensure_authenticated,
     get_credentials,
+    load_authenticated_client,
     refresh_tokens,
 )
 from garmin_health_data.constants import GARMIN_DATA_REGISTRY, GARMIN_FILE_TYPES
@@ -51,6 +53,21 @@ from garmin_health_data.retention.parsers import DURATION, TIME_GRAIN
 from garmin_health_data.retention.strategies import format_strategy_table
 from garmin_health_data.utils import format_count, format_date, format_file_size
 from garmin_health_data.version_check import check_for_newer_version
+from garmin_health_data.workout_publish import WorkoutPublishError, publish_workout
+from garmin_health_data.workout_state import (
+    DEFAULT_STATE_PATH,
+    load_state,
+    record_workout,
+    remove_schedule_receipt,
+    remove_workout_receipt,
+    save_state,
+)
+from garmin_health_data.workouts import (
+    WorkoutDefinitionError,
+    definition_hash,
+    load_definition,
+    render_garmin_workout,
+)
 
 # Filename timestamp pattern shared by all extracted JSON / FIT / TCX / GPX
 # / KML files. Used to group files into per-(user_id, timestamp) FileSets.
@@ -1418,6 +1435,402 @@ def migrate_multisport_cmd(db_path: str, dry_run: bool, no_backup: bool):
             click.echo(f"💾 Backup: {result['backup_path']}")
     else:
         click.secho(f"ℹ️  Nothing to do: {result['reason']}.", fg="cyan")
+
+
+def _echo_json(value) -> None:
+    click.echo(json.dumps(value, indent=2, sort_keys=True, default=str))
+
+
+def _definition(file_path: str) -> dict:
+    try:
+        return load_definition(file_path)
+    except WorkoutDefinitionError as err:
+        raise click.ClickException(str(err)) from err
+
+
+def _emit(ctx: click.Context, operation: str, data, warnings=None) -> None:
+    warnings = warnings or []
+    if ctx.obj["output"] == "json":
+        _echo_json(
+            {
+                "schema_version": 1,
+                "ok": True,
+                "operation": operation,
+                "data": data,
+                "warnings": warnings,
+            }
+        )
+        return
+    if isinstance(data, list):
+        if not data:
+            click.echo("No matching workouts.")
+        for item in data:
+            click.echo(" | ".join(f"{key}={value}" for key, value in item.items()))
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            click.echo(f"{key}: {value}")
+    else:
+        click.echo(data)
+    for warning in warnings:
+        click.secho(f"Warning: {warning}", fg="yellow", err=True)
+
+
+def _workout_client(ctx: click.Context):
+    try:
+        return load_authenticated_client(
+            account=ctx.obj["account"], base_token_dir=ctx.obj["token_dir"]
+        )
+    except (OSError, RuntimeError, ValueError) as err:
+        raise click.ClickException(str(err)) from err
+
+
+@cli.group()
+@click.option(
+    "--account",
+    help="Garmin user ID. Required when more than one account is cached.",
+)
+@click.option(
+    "--token-dir",
+    default="~/.garminconnect",
+    show_default=True,
+    help="Root directory containing cached per-account Garmin tokens.",
+)
+@click.option(
+    "--state-path",
+    default=DEFAULT_STATE_PATH,
+    show_default=True,
+    help="Local workout publishing receipt file.",
+)
+@click.option(
+    "--output",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+)
+@click.pass_context
+def workout(
+    ctx: click.Context,
+    account: Optional[str],
+    token_dir: str,
+    state_path: str,
+    output: str,
+) -> None:
+    """Validate, upload, inspect, and schedule structured workouts."""
+    ctx.ensure_object(dict)
+    ctx.obj.update(
+        account=account, token_dir=token_dir, state_path=state_path, output=output
+    )
+
+
+@workout.command(name="validate")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.pass_context
+def workout_validate(ctx: click.Context, file_path: str) -> None:
+    """Validate a versioned coaching workout definition offline."""
+    definition = _definition(file_path)
+    workout_data = definition["workout"]
+    _emit(
+        ctx,
+        "workout.validate",
+        {
+            "key": workout_data["key"],
+            "name": workout_data["name"],
+            "sport": workout_data["sport"],
+            "estimated_duration_seconds": workout_data[
+                "estimated_duration_seconds"
+            ],
+            "definition_hash": definition_hash(definition),
+            "valid": True,
+        },
+    )
+
+
+@workout.command(name="render")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.pass_context
+def workout_render(ctx: click.Context, file_path: str) -> None:
+    """Render Garmin JSON from a definition without network access."""
+    payload = render_garmin_workout(_definition(file_path))
+    _emit(ctx, "workout.render", payload)
+
+
+@workout.command(name="list")
+@click.option("--start", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--limit", type=click.IntRange(min=1), default=100, show_default=True)
+@click.pass_context
+def workout_list(ctx: click.Context, start: int, limit: int) -> None:
+    """List workout templates in Garmin Connect."""
+    workouts = _workout_client(ctx).get_workouts(start=start, limit=limit)
+    summaries = [
+        {
+            "workout_id": item.get("workoutId"),
+            "name": item.get("workoutName"),
+            "sport": (item.get("sportType") or {}).get("sportTypeKey"),
+            "duration_seconds": item.get("estimatedDurationInSecs"),
+        }
+        for item in workouts
+    ]
+    _emit(ctx, "workout.list", summaries)
+
+
+@workout.command(name="show")
+@click.option("--workout-id", type=click.IntRange(min=1), required=True)
+@click.pass_context
+def workout_show(ctx: click.Context, workout_id: int) -> None:
+    """Show one workout template."""
+    _emit(
+        ctx,
+        "workout.show",
+        _workout_client(ctx).get_workout_by_id(workout_id),
+    )
+
+
+@workout.command(name="calendar")
+@click.option(
+    "--start-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    required=True,
+)
+@click.option(
+    "--end-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    required=True,
+    help="Inclusive calendar end date.",
+)
+@click.pass_context
+def workout_calendar(
+    ctx: click.Context, start_date: datetime, end_date: datetime
+) -> None:
+    """List only scheduled workouts in an inclusive date range."""
+    if end_date < start_date:
+        raise click.ClickException("--end-date must not be before --start-date")
+    client = _workout_client(ctx)
+    cursor = start_date.replace(day=1)
+    seen = set()
+    items = []
+    while cursor <= end_date:
+        response = client.get_scheduled_workouts(cursor.year, cursor.month)
+        for item in response.get("calendarItems", []):
+            item_date = item.get("date") or item.get("calendarDate")
+            if (
+                item.get("itemType") == "workout"
+                and item_date
+                and start_date.date().isoformat()
+                <= item_date
+                <= end_date.date().isoformat()
+            ):
+                schedule_id = item.get("id") or item.get("workoutScheduleId")
+                identity = (schedule_id, item_date)
+                if identity not in seen:
+                    seen.add(identity)
+                    items.append(
+                        {
+                            "date": item_date,
+                            "schedule_id": schedule_id,
+                            "workout_id": item.get("workoutId"),
+                            "name": item.get("title") or item.get("workoutName"),
+                            "sport": item.get("sportTypeKey"),
+                        }
+                    )
+        cursor = (
+            cursor.replace(year=cursor.year + 1, month=1)
+            if cursor.month == 12
+            else cursor.replace(month=cursor.month + 1)
+        )
+    _emit(ctx, "workout.calendar", sorted(items, key=lambda item: item["date"]))
+
+
+@workout.command(name="schedule")
+@click.option("--workout-id", type=click.IntRange(min=1), required=True)
+@click.option(
+    "--date", "schedule_date", type=click.DateTime(formats=["%Y-%m-%d"]), required=True
+)
+@click.pass_context
+def workout_schedule(
+    ctx: click.Context, workout_id: int, schedule_date: datetime
+) -> None:
+    """Schedule an existing workout on the Garmin calendar."""
+    client = _workout_client(ctx)
+    scheduled = client.schedule_workout(workout_id, schedule_date.date().isoformat())
+    schedule_id = scheduled.get("workoutScheduleId")
+    verified = (
+        client.get_scheduled_workout_by_id(schedule_id) if schedule_id else None
+    )
+    _emit(
+        ctx,
+        "workout.schedule",
+        {
+            "garmin_workout_id": workout_id,
+            "garmin_schedule_id": schedule_id,
+            "calendar_date": schedule_date.date().isoformat(),
+            "verified": bool(verified),
+        },
+    )
+
+
+@workout.command(name="create")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.pass_context
+def workout_create(ctx: click.Context, file_path: str) -> None:
+    """Create a Garmin template from a versioned workout definition."""
+    definition = _definition(file_path)
+    client = _workout_client(ctx)
+    created = client.upload_workout(render_garmin_workout(definition))
+    workout_id = created.get("workoutId")
+    if not workout_id:
+        raise click.ClickException("Garmin response contained no workoutId")
+    verified = client.get_workout_by_id(workout_id)
+    state = load_state(ctx.obj["state_path"])
+    record_workout(
+        state,
+        client.account_id,
+        definition["workout"]["key"],
+        workout_id,
+        definition_hash(definition),
+    )
+    save_state(state, ctx.obj["state_path"])
+    _emit(
+        ctx,
+        "workout.create",
+        {
+            "key": definition["workout"]["key"],
+            "garmin_workout_id": workout_id,
+            "verified": verified.get("workoutId") == workout_id,
+        },
+    )
+
+
+@workout.command(name="update")
+@click.option("--workout-id", type=click.IntRange(min=1), required=True)
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.option("--yes", is_flag=True, help="Confirm replacement without prompting.")
+@click.pass_context
+def workout_update(
+    ctx: click.Context, workout_id: int, file_path: str, yes: bool
+) -> None:
+    """Replace one Garmin template using a versioned definition."""
+    definition = _definition(file_path)
+    if not yes and not click.confirm(f"Update Garmin workout {workout_id}?"):
+        raise click.Abort()
+    client = _workout_client(ctx)
+    updated = client.update_workout(workout_id, render_garmin_workout(definition))
+    actual_id = int(updated.get("workoutId", workout_id))
+    verified = client.get_workout_by_id(actual_id)
+    state = load_state(ctx.obj["state_path"])
+    record_workout(
+        state,
+        client.account_id,
+        definition["workout"]["key"],
+        actual_id,
+        definition_hash(definition),
+    )
+    save_state(state, ctx.obj["state_path"])
+    _emit(
+        ctx,
+        "workout.update",
+        {"garmin_workout_id": actual_id, "verified": bool(verified)},
+    )
+
+
+@workout.command(name="publish")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.option(
+    "--date", "schedule_date", type=click.DateTime(formats=["%Y-%m-%d"]), required=True
+)
+@click.option(
+    "--update", "allow_update", is_flag=True, help="Update a changed existing key."
+)
+@click.pass_context
+def workout_publish(
+    ctx: click.Context,
+    file_path: str,
+    schedule_date: datetime,
+    allow_update: bool,
+) -> None:
+    """Idempotently create/update and schedule a workout, with read-back."""
+    try:
+        result = publish_workout(
+            _workout_client(ctx),
+            _definition(file_path),
+            schedule_date.date().isoformat(),
+            ctx.obj["state_path"],
+            allow_update=allow_update,
+        )
+    except (ValueError, WorkoutPublishError) as err:
+        raise click.ClickException(str(err)) from err
+    _emit(ctx, "workout.publish", result)
+
+
+@workout.command(name="unschedule")
+@click.option("--schedule-id", type=click.IntRange(min=1), required=True)
+@click.option("--yes", is_flag=True, help="Confirm removal without prompting.")
+@click.pass_context
+def workout_unschedule(ctx: click.Context, schedule_id: int, yes: bool) -> None:
+    """Remove one calendar occurrence without deleting its template."""
+    if not yes and not click.confirm(f"Unschedule Garmin occurrence {schedule_id}?"):
+        raise click.Abort()
+    client = _workout_client(ctx)
+    client.unschedule_workout(schedule_id)
+    state = load_state(ctx.obj["state_path"])
+    remove_schedule_receipt(state, client.account_id, schedule_id)
+    save_state(state, ctx.obj["state_path"])
+    _emit(ctx, "workout.unschedule", {"garmin_schedule_id": schedule_id})
+
+
+@workout.command(name="delete")
+@click.option("--workout-id", type=click.IntRange(min=1), required=True)
+@click.option("--yes", is_flag=True, help="Confirm deletion without prompting.")
+@click.pass_context
+def workout_delete(ctx: click.Context, workout_id: int, yes: bool) -> None:
+    """Delete a Garmin workout template; calendar entries are not removed."""
+    if not yes and not click.confirm(f"Delete Garmin workout {workout_id}?"):
+        raise click.Abort()
+    client = _workout_client(ctx)
+    client.delete_workout(workout_id)
+    state = load_state(ctx.obj["state_path"])
+    remove_workout_receipt(state, client.account_id, workout_id)
+    save_state(state, ctx.obj["state_path"])
+    _emit(ctx, "workout.delete", {"garmin_workout_id": workout_id})
+
+
+@workout.command(name="upload")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.option(
+    "--schedule-date", type=click.DateTime(formats=["%Y-%m-%d"]), default=None
+)
+@click.pass_context
+def workout_upload(
+    ctx: click.Context, file_path: str, schedule_date: Optional[datetime]
+) -> None:
+    """Upload a workout and optionally schedule it, then read it back."""
+    path = Path(file_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        raise click.ClickException(str(err)) from err
+    if not isinstance(payload, dict) or not payload.get("workoutName"):
+        raise click.ClickException("Raw Garmin JSON requires workoutName")
+    client = _workout_client(ctx)
+    uploaded = client.upload_workout(payload)
+    workout_id = uploaded.get("workoutId")
+    if not workout_id:
+        raise click.ClickException(
+            "Garmin accepted the upload but returned no workoutId; refusing to "
+            "schedule."
+        )
+
+    result = {
+        "uploaded": uploaded,
+        "workout_verification": client.get_workout_by_id(workout_id),
+    }
+    if schedule_date is not None:
+        result["scheduled"] = client.schedule_workout(
+            workout_id, schedule_date.date().isoformat()
+        )
+        result["calendar_verification"] = client.get_scheduled_workouts(
+            schedule_date.year, schedule_date.month
+        )
+    _emit(ctx, "workout.upload", result)
 
 
 if __name__ == "__main__":

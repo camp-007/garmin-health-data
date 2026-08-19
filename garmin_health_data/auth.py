@@ -8,7 +8,7 @@ Authentication (MFA) support.
 import os
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import click
 from garmin_health_data.garmin_client import GarminClient
@@ -153,6 +153,40 @@ def discover_accounts(
     raise RuntimeError(
         f"No accounts found in {base_path}. Run 'garmin auth' to authenticate."
     )
+
+
+def load_authenticated_client(
+    account: Optional[str] = None,
+    base_token_dir: str = "~/.garminconnect",
+) -> GarminClient:
+    """Load one authenticated client from the extractor's shared token cache.
+
+    When exactly one account is cached it is selected automatically. With multiple
+    accounts, callers must provide the Garmin user ID explicitly so a mutating command
+    cannot target the wrong account.
+    """
+    accounts = discover_accounts(base_token_dir)
+    if account is None:
+        if len(accounts) != 1:
+            available = ", ".join(user_id for user_id, _ in accounts)
+            raise ValueError(
+                "Multiple Garmin accounts are cached; pass --account with one of: "
+                f"{available}"
+            )
+        selected_account, token_path = accounts[0]
+    else:
+        matches = [path for user_id, path in accounts if user_id == str(account)]
+        if not matches:
+            available = ", ".join(user_id for user_id, _ in accounts)
+            raise ValueError(
+                f"Garmin account {account!r} was not found; available: {available}"
+            )
+        token_path = matches[0]
+        selected_account = str(account)
+
+    client = GarminClient.from_tokens(token_path)
+    client.account_id = selected_account
+    return client
 
 
 def refresh_tokens(

@@ -102,6 +102,11 @@ LOGIN_DELAY_MAX_S = 45.0
 SOCIAL_PROFILE_URL = "/userprofile-service/socialProfile"
 USER_SETTINGS_URL = "/userprofile-service/userprofile/user-settings"
 
+# Structured workouts and calendar scheduling.
+WORKOUTS_URL = "/workout-service"
+WORKOUT_SCHEDULE_URL = f"{WORKOUTS_URL}/schedule"
+CALENDAR_URL = "/calendar-service"
+
 # Wellness endpoints.
 DAILY_SLEEP_URL = "/wellness-service/wellness/dailySleepData"
 DAILY_STRESS_URL = "/wellness-service/wellness/dailyStress"

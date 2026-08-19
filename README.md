@@ -267,6 +267,7 @@ The data lives in a single SQLite file (default `./garmin_data.db`). Query it wi
 | Command | What it does | Section |
 |---|---|---|
 | [`garmin auth`](#garmin-auth) | Log into Garmin Connect and store OAuth tokens. Run once per account. | [auth](#garmin-auth) |
+| [`garmin workout`](#garmin-workout) | Validate, render, publish, schedule, and manage structured running/cycling workouts. | [workout](#garmin-workout) |
 | [`garmin extract`](#garmin-extract) | Download data from Garmin Connect and load it into the SQLite database. The default workflow. Supports rolling-window auto retention via opt-in flags. | [extract](#garmin-extract) |
 | [`garmin info`](#garmin-info) | Show row counts, last-update dates, and DB size. Read-only. | [info](#garmin-info) |
 | [`garmin verify`](#garmin-verify) | Check schema integrity and run SQLite's `PRAGMA integrity_check`. Read-only. | [verify](#garmin-verify) |
@@ -285,6 +286,93 @@ garmin auth --email user@example.com --password '...'
 ```
 
 Performs a fresh interactive login and stores OAuth tokens in `~/.garminconnect/<user_id>/`. Run once per Garmin Connect account; tokens auto-refresh as long as you extract at least once every 30 days. The `--email` / `--password` flags can also be supplied via the `GARMIN_EMAIL` / `GARMIN_PASSWORD` environment variables. See the [Authentication internals](#authentication-internals) collapsible below for the login-strategy waterfall and the 30-45s anti-rate-limit pause explanation.
+
+### `garmin workout`
+
+Workout commands reuse the OAuth token cache created by `garmin auth`. They are
+separate from extraction and do not write to the health database. Do not run a workout
+mutation concurrently with another Garmin command because token refreshes rotate the
+shared cached credentials.
+
+Definitions use a strict, versioned JSON contract rather than Garmin's private payload:
+
+```json
+{
+  "schema_version": 1,
+  "workout": {
+    "key": "threshold-6x3-v1",
+    "name": "6 x 3 min Threshold",
+    "sport": "running",
+    "steps": [
+      {
+        "type": "warmup",
+        "duration": {"type": "time", "seconds": 900},
+        "target": {"type": "open"}
+      },
+      {
+        "type": "repeat",
+        "count": 6,
+        "steps": [
+          {
+            "type": "interval",
+            "duration": {"type": "time", "seconds": 180},
+            "target": {
+              "type": "pace",
+              "min_seconds_per_km": 285,
+              "max_seconds_per_km": 300
+            }
+          },
+          {
+            "type": "recovery",
+            "duration": {"type": "time", "seconds": 120},
+            "target": {"type": "open"}
+          }
+        ]
+      },
+      {
+        "type": "cooldown",
+        "duration": {"type": "time", "seconds": 600},
+        "target": {"type": "open"}
+      }
+    ]
+  }
+}
+```
+
+Canonical units are seconds, meters, seconds per kilometer, beats per minute,
+and watts. Supported durations are `time`, `distance`, and `lap_button`. Supported
+targets are `open`, `heart_rate`, `heart_rate_zone`, `pace`, `power`, and
+`power_zone`. Running and cycling are supported; pace targets are running-only.
+
+```bash
+# Offline and non-mutating
+garmin workout validate --file workout.json
+garmin workout --output json render --file workout.json
+
+# Create and inspect templates
+garmin workout create --file workout.json
+garmin workout list --limit 20
+garmin workout show --workout-id 1669669714
+
+# Idempotently create/update, schedule, and verify
+garmin workout --output json publish --file workout.json --date 2026-08-22
+garmin workout publish --file workout.json --date 2026-08-22 --update
+
+# Calendar and explicit destructive operations
+garmin workout calendar --start-date 2026-08-18 --end-date 2026-08-31
+garmin workout unschedule --schedule-id 1749684028
+garmin workout delete --workout-id 1669669714
+```
+
+`publish` records per-account idempotency receipts in
+`~/.garminconnect/workout_receipts.json`. Repeating the same key, definition, and date
+reuses the existing workout and schedule. A changed definition under the same key is
+rejected unless `--update` is passed. Use `--state-path` to choose another receipt
+file. `--output json` returns a stable result envelope suitable for scripts.
+
+The legacy `upload` command accepts raw Garmin JSON for endpoint debugging. Prefer
+`create` or `publish` for normal use because they validate the public contract and
+write idempotency receipts.
 
 ### `garmin extract`
 

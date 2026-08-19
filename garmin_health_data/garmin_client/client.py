@@ -130,6 +130,7 @@ class GarminClient:
         # Profile state, populated by _load_profile after auth.
         self.display_name: Optional[str] = None
         self.full_name: Optional[str] = None
+        self.account_id: Optional[str] = None
 
         # Path on disk where tokens were loaded from (or are to be saved to). Used
         # by _refresh_session to persist refreshed tokens back to disk so the
@@ -992,6 +993,46 @@ class GarminClient:
         See :func:`api.get_user_profile`.
         """
         return api.get_user_profile(self)
+
+    def get_workouts(self, start: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
+        """See :func:`api.get_workouts`."""
+        return api.get_workouts(self, start, limit)
+
+    def get_workout_by_id(self, workout_id: Any) -> Dict[str, Any]:
+        """See :func:`api.get_workout_by_id`."""
+        return api.get_workout_by_id(self, workout_id)
+
+    def update_workout(
+        self, workout_id: Any, workout: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """See :func:`api.update_workout`."""
+        return api.update_workout(self, workout_id, workout)
+
+    def delete_workout(self, workout_id: Any) -> Dict[str, Any]:
+        """See :func:`api.delete_workout`."""
+        return api.delete_workout(self, workout_id)
+
+    def upload_workout(self, workout: Dict[str, Any]) -> Dict[str, Any]:
+        """See :func:`api.upload_workout`."""
+        return api.upload_workout(self, workout)
+
+    def schedule_workout(self, workout_id: Any, date_str: str) -> Dict[str, Any]:
+        """See :func:`api.schedule_workout`."""
+        return api.schedule_workout(self, workout_id, date_str)
+
+    def get_scheduled_workouts(self, year: int, month: int) -> Dict[str, Any]:
+        """See :func:`api.get_scheduled_workouts`."""
+        return api.get_scheduled_workouts(self, year, month)
+
+    def get_scheduled_workout_by_id(
+        self, scheduled_workout_id: Any
+    ) -> Dict[str, Any]:
+        """See :func:`api.get_scheduled_workout_by_id`."""
+        return api.get_scheduled_workout_by_id(self, scheduled_workout_id)
+
+    def unschedule_workout(self, scheduled_workout_id: Any) -> Dict[str, Any]:
+        """See :func:`api.unschedule_workout`."""
+        return api.unschedule_workout(self, scheduled_workout_id)
 
     def download_activity(
         self,
