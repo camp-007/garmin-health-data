@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -101,6 +102,8 @@ def validate_definition(raw: Any) -> Dict[str, Any]:
         workout,
         {
             "key",
+            "family",
+            "version",
             "name",
             "description",
             "sport",
@@ -112,6 +115,15 @@ def validate_definition(raw: Any) -> Dict[str, Any]:
     key = workout.get("key")
     if not isinstance(key, str) or not key.strip() or len(key) > 100:
         _error("$.workout.key", "must be a non-empty string of at most 100 characters")
+    family = workout.get("family")
+    version = workout.get("version")
+    if family is not None or version is not None:
+        if not isinstance(family, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", family):
+            _error("$.workout.family", "must be a lowercase hyphenated identifier")
+        if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+            _error("$.workout.version", "must be a positive integer")
+        if key != f"{family}-v{version}":
+            _error("$.workout.key", "must equal '<family>-v<version>'")
     name = workout.get("name")
     if not isinstance(name, str) or not name.strip() or len(name) > 80:
         _error("$.workout.name", "must be a non-empty string of at most 80 characters")
@@ -148,16 +160,20 @@ def validate_definition(raw: Any) -> Dict[str, Any]:
             "$.workout.steps",
             f"expands to {expanded} executable steps; maximum is {MAX_EXPANDED_STEPS}",
         )
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "workout": {
+    normalized_workout = {
             "key": key.strip(),
             "name": name.strip(),
             "description": description,
             "sport": sport,
             "estimated_duration_seconds": estimate,
             "steps": normalized_steps,
-        },
+    }
+    if family is not None:
+        normalized_workout["family"] = family
+        normalized_workout["version"] = version
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "workout": normalized_workout,
     }
 
 

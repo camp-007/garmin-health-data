@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS activity (
     , average_hr FLOAT                     -- Average heart rate during the activity in beats per minute.
     , max_hr FLOAT                         -- Maximum heart rate reached during the activity in beats per minute.
     , device_id BIGINT                     -- Unique identifier for the Garmin device used to record the activity.
+    , garmin_workout_id BIGINT              -- Garmin Connect workout template ID from ACTIVITIES_LIST.workoutId.
     , manufacturer TEXT                    -- Manufacturer of the device (typically ''GARMIN'').
     , time_zone_id INTEGER                 -- Garmin''s internal timezone identifier for the activity location.
     , has_polyline BOOLEAN NOT NULL DEFAULT 0  -- Whether GPS track data (polyline) is available for this activity.
@@ -115,6 +116,10 @@ ON activity (user_id, start_ts DESC);
 
 CREATE INDEX IF NOT EXISTS activity_parent_activity_id_idx
 ON activity (parent_activity_id);
+
+CREATE INDEX IF NOT EXISTS activity_garmin_workout_id_idx
+ON activity (garmin_workout_id)
+WHERE garmin_workout_id IS NOT NULL;
 
 -- Authoritative per-activity zone chart data from Garmin's dedicated endpoints.
 CREATE TABLE IF NOT EXISTS activity_zone (
@@ -793,6 +798,31 @@ CREATE TABLE IF NOT EXISTS activity_lap_metric (
     , PRIMARY KEY (activity_id, lap_idx, name)
     , FOREIGN KEY (activity_id) REFERENCES activity (activity_id) ON DELETE CASCADE
 );
+
+-- Structured-workout evidence embedded in the original activity FIT file. The FIT
+-- training_file serial_number is Garmin Connect's workout template ID for validated
+-- uploads; definition_json preserves the decoded workout/workout_step messages for
+-- fingerprint fallback and step-level analysis.
+CREATE TABLE IF NOT EXISTS activity_workout_metadata (
+    activity_id BIGINT PRIMARY KEY
+    , fit_workout_id BIGINT
+    , workout_name TEXT
+    , workout_description TEXT
+    , sport TEXT
+    , sub_sport TEXT
+    , step_count INTEGER
+    , definition_json JSON
+    , create_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    , update_ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    , FOREIGN KEY (activity_id) REFERENCES activity (activity_id) ON DELETE CASCADE
+    , CONSTRAINT activity_workout_metadata_definition_json_valid CHECK (
+        definition_json IS NULL OR JSON_VALID(definition_json)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS activity_workout_metadata_fit_workout_id_idx
+ON activity_workout_metadata (fit_workout_id)
+WHERE fit_workout_id IS NOT NULL;
 
 -- Eagerly materialized GPS path for activities, populated during FIT file processing. Stores per-activity ordered coordinate sequences as a JSON array of [longitude, latitude] pairs in decimal degrees, sorted ascending by timestamp. One row per activity with GPS data; activities without GPS samples (e.g., indoor workouts) have no row.
 CREATE TABLE IF NOT EXISTS activity_path (

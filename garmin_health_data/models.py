@@ -198,6 +198,7 @@ class Activity(Base, UpsertBase):
 
     # Device and technical info.
     device_id = Column(BigInteger)
+    garmin_workout_id = Column(BigInteger)
     manufacturer = Column(String)
     time_zone_id = Column(Integer)
 
@@ -1062,6 +1063,25 @@ class ActivityLapMetric(Base, InsertBase):
     name = Column(Text, primary_key=True)
     value = Column(Float)
     units = Column(Text)
+
+
+class ActivityWorkoutMetadata(Base, UpsertBase):
+    """Workout identity and embedded definition evidence decoded from activity FIT."""
+
+    __tablename__ = "activity_workout_metadata"
+
+    activity_id = Column(
+        BigInteger,
+        ForeignKey("activity.activity_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    fit_workout_id = Column(BigInteger)
+    workout_name = Column(Text)
+    workout_description = Column(Text)
+    sport = Column(Text)
+    sub_sport = Column(Text)
+    step_count = Column(Integer)
+    definition_json = Column(JSON)
 
 
 class ActivityPath(Base, InsertBase):

@@ -357,6 +357,7 @@ garmin workout show --workout-id 1669669714
 # Idempotently create/update, schedule, and verify
 garmin workout --output json publish --file workout.json --date 2026-08-22
 garmin workout publish --file workout.json --date 2026-08-22 --update
+garmin workout --state-db training_state.db --output json reconcile
 
 # Calendar and explicit destructive operations
 garmin workout calendar --start-date 2026-08-18 --end-date 2026-08-31
@@ -364,15 +365,18 @@ garmin workout unschedule --schedule-id 1749684028
 garmin workout delete --workout-id 1669669714
 ```
 
-`publish` records per-account idempotency receipts in
-`~/.garminconnect/workout_receipts.json`. Repeating the same key, definition, and date
-reuses the existing workout and schedule. A changed definition under the same key is
-rejected unless `--update` is passed. Use `--state-path` to choose another receipt
-file. `--output json` returns a stable result envelope suitable for scripts.
+`publish` records per-account idempotency and reconciliation state transactionally in
+the initialized SQLite database selected by `GARMIN_TRAINING_STATE_DB` or `--state-db`.
+Repeating the same key, definition, and date reuses the existing workout and schedule.
+A changed definition under the same key is rejected unless `--update` is passed. IDs
+returned before a failed read-back remain `pending_verification`; `reconcile` performs
+bounded read-back without creating remote objects. The old JSON backend remains
+available only when an explicit `.json` `--state-path` is supplied for compatibility.
+`--output json` returns a stable result envelope suitable for scripts.
 
 The legacy `upload` command accepts raw Garmin JSON for endpoint debugging. Prefer
 `create` or `publish` for normal use because they validate the public contract and
-write idempotency receipts.
+write publishing state.
 
 ### `garmin extract`
 

@@ -38,6 +38,7 @@ from garmin_health_data.models import (
     ActivityPath,
     ActivitySplitMetric,
     ActivityTsMetric,
+    ActivityWorkoutMetadata,
     ActivityZone,
     BodyBattery,
     BodyComposition,
@@ -745,6 +746,7 @@ class GarminProcessor(Processor):
             {
                 "average_hr": activity_data.pop("averageHR", None),
                 "max_hr": activity_data.pop("maxHR", None),
+                "garmin_workout_id": activity_data.pop("workoutId", None),
             }
         )
 
@@ -3249,6 +3251,7 @@ class GarminProcessor(Processor):
         gps_records_deg: List[tuple],
         session: Session,
         split_metrics: Optional[List[ActivitySplitMetric]] = None,
+        workout_metadata: Optional[ActivityWorkoutMetadata] = None,
     ) -> None:
         """
         Persist parsed activity metrics with idempotent delete+insert semantics.
@@ -3285,6 +3288,7 @@ class GarminProcessor(Processor):
             ActivitySplitMetric,
             ActivityLapMetric,
             ActivityPath,
+            ActivityWorkoutMetadata,
         ):
             session.execute(
                 delete(model)
@@ -3356,6 +3360,18 @@ class GarminProcessor(Processor):
             click.echo(f"Processed {len(lap_metrics)} lap records.")
         else:
             click.secho("⚠️ No lap data found.", fg="yellow")
+
+        if workout_metadata is not None:
+            metadata_keys = [
+                c.key
+                for c in ActivityWorkoutMetadata.__table__.columns
+                if c.server_default is None
+            ]
+            session.execute(
+                insert(ActivityWorkoutMetadata),
+                [{k: getattr(workout_metadata, k) for k in metadata_keys}],
+            )
+            click.echo("Processed structured workout metadata.")
 
         if gps_records_deg:
             # Sort ascending by timestamp so path order matches activity
@@ -3442,6 +3458,23 @@ class GarminProcessor(Processor):
         lap_metrics = []
         split_idx = 0
         lap_idx = 0
+        fit_workout_id = None
+        fit_workout = None
+        fit_workout_steps = []
+
+        def decoded_fields(frame):
+            result = {}
+            for field in frame.fields:
+                if (
+                    field.name
+                    and "unknown" not in field.name.lower()
+                    and field.value is not None
+                ):
+                    value = field.value
+                    if isinstance(value, datetime):
+                        value = value.isoformat()
+                    result[field.name] = value
+            return result
 
         # Collect per-frame GPS samples for activity_path materialization.
         # Each element is (timestamp, lon_semicircles, lat_semicircles).
@@ -3450,8 +3483,17 @@ class GarminProcessor(Processor):
         with fitdecode.FitReader(file_path) as fit:
             for frame in fit:
                 if frame.frame_type == fitdecode.FIT_FRAME_DATA:
+                    if frame.name == "training_file":
+                        fields = decoded_fields(frame)
+                        if fields.get("type") == "workout":
+                            serial = fields.get("serial_number")
+                            fit_workout_id = int(serial) if serial is not None else None
+                    elif frame.name == "workout":
+                        fit_workout = decoded_fields(frame)
+                    elif frame.name == "workout_step":
+                        fit_workout_steps.append(decoded_fields(frame))
                     # Process record frames for time-series data.
-                    if frame.name == "record":
+                    elif frame.name == "record":
                         # Two-pass approach: first find timestamp, then process
                         # all fields.
                         timestamp = None
@@ -3620,6 +3662,25 @@ class GarminProcessor(Processor):
             for ts, lon_semi, lat_semi in gps_records
         ]
 
+        workout_metadata = None
+        if fit_workout_id is not None or fit_workout is not None:
+            fit_workout = fit_workout or {}
+            workout_metadata = ActivityWorkoutMetadata(
+                activity_id=activity_id,
+                fit_workout_id=fit_workout_id,
+                workout_name=fit_workout.get("wkt_name"),
+                workout_description=fit_workout.get("wkt_description"),
+                sport=fit_workout.get("sport"),
+                sub_sport=fit_workout.get("sub_sport"),
+                step_count=fit_workout.get(
+                    "num_valid_steps", len(fit_workout_steps)
+                ),
+                definition_json={
+                    "workout": fit_workout,
+                    "steps": fit_workout_steps,
+                },
+            )
+
         self._persist_activity_metrics(
             activity_id=activity_id,
             file_path=file_path,
@@ -3629,6 +3690,7 @@ class GarminProcessor(Processor):
             gps_records_deg=gps_records_deg,
             session=session,
             split_metrics=split_metrics,
+            workout_metadata=workout_metadata,
         )
 
     def _process_activity_file(self, file_path: Path, session: Session):

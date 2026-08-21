@@ -69,6 +69,18 @@ def test_validate_is_strict_and_normalizes() -> None:
         validate_definition(invalid)
 
 
+def test_catalog_family_version_identity_is_preserved() -> None:
+    raw = definition()
+    raw["workout"].update({"family": "threshold-2x3", "version": 1})
+    normalized = validate_definition(raw)
+    assert normalized["workout"]["family"] == "threshold-2x3"
+    assert normalized["workout"]["version"] == 1
+
+    raw["workout"]["key"] = "wrong-v1"
+    with pytest.raises(WorkoutDefinitionError, match="must equal"):
+        validate_definition(raw)
+
+
 def test_duration_calculation_handles_repeats_and_open_steps() -> None:
     steps = validate_definition(definition())["workout"]["steps"]
     assert calculate_duration(steps) is None

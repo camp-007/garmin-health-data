@@ -5,6 +5,7 @@ Command-line interface for garmin-health-data.
 import json
 import logging
 import re
+import sqlite3
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -53,7 +54,11 @@ from garmin_health_data.retention.parsers import DURATION, TIME_GRAIN
 from garmin_health_data.retention.strategies import format_strategy_table
 from garmin_health_data.utils import format_count, format_date, format_file_size
 from garmin_health_data.version_check import check_for_newer_version
-from garmin_health_data.workout_publish import WorkoutPublishError, publish_workout
+from garmin_health_data.workout_publish import (
+    WorkoutPublishError,
+    publish_workout,
+    reconcile_workout_state,
+)
 from garmin_health_data.workout_state import (
     DEFAULT_STATE_PATH,
     load_state,
@@ -68,6 +73,7 @@ from garmin_health_data.workouts import (
     load_definition,
     render_garmin_workout,
 )
+from garmin_health_data.workout_metadata import backfill_workout_metadata
 
 # Filename timestamp pattern shared by all extracted JSON / FIT / TCX / GPX
 # / KML files. Used to group files into per-(user_id, timestamp) FileSets.
@@ -1484,6 +1490,19 @@ def _workout_client(ctx: click.Context):
         raise click.ClickException(str(err)) from err
 
 
+@cli.command(name="backfill-workout-metadata")
+@click.option("--db-path", required=True, type=click.Path(path_type=Path))
+@click.option("--files-root", required=True, type=click.Path(path_type=Path, exists=True))
+@click.option("--dry-run", is_flag=True, help="Inspect preserved files without changing SQLite.")
+def backfill_workout_metadata_cmd(db_path: Path, files_root: Path, dry_run: bool) -> None:
+    """Migrate and backfill structured-workout identifiers from preserved files."""
+    try:
+        result = backfill_workout_metadata(db_path, files_root, dry_run=dry_run)
+    except (OSError, ValueError, sqlite3.Error, json.JSONDecodeError) as err:
+        raise click.ClickException(str(err)) from err
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 @cli.group()
 @click.option(
     "--account",
@@ -1496,10 +1515,12 @@ def _workout_client(ctx: click.Context):
     help="Root directory containing cached per-account Garmin tokens.",
 )
 @click.option(
+    "--state-db",
     "--state-path",
+    "state_path",
     default=DEFAULT_STATE_PATH,
     show_default=True,
-    help="Local workout publishing receipt file.",
+    help="SQLite training state database; --state-path remains as a compatibility alias.",
 )
 @click.option(
     "--output",
@@ -1759,6 +1780,17 @@ def workout_publish(
     except (ValueError, WorkoutPublishError) as err:
         raise click.ClickException(str(err)) from err
     _emit(ctx, "workout.publish", result)
+
+
+@workout.command(name="reconcile")
+@click.pass_context
+def workout_reconcile(ctx: click.Context) -> None:
+    """Read back pending SQLite publications and schedules without creating objects."""
+    try:
+        result = reconcile_workout_state(_workout_client(ctx), ctx.obj["state_path"])
+    except (ValueError, WorkoutPublishError) as err:
+        raise click.ClickException(str(err)) from err
+    _emit(ctx, "workout.reconcile", result)
 
 
 @workout.command(name="unschedule")
