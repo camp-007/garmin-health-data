@@ -56,6 +56,7 @@ from garmin_health_data.utils import format_count, format_date, format_file_size
 from garmin_health_data.version_check import check_for_newer_version
 from garmin_health_data.workout_publish import (
     WorkoutPublishError,
+    preview_workout,
     publish_workout,
     reconcile_workout_state,
 )
@@ -1573,6 +1574,26 @@ def workout_render(ctx: click.Context, file_path: str) -> None:
     """Render Garmin JSON from a definition without network access."""
     payload = render_garmin_workout(_definition(file_path))
     _emit(ctx, "workout.render", payload)
+
+
+@workout.command(name="preview")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
+@click.option("--date", "schedule_date", type=click.DateTime(formats=["%Y-%m-%d"]), required=True)
+@click.option("--update", "allow_update", is_flag=True)
+@click.option("--allow-same-day", is_flag=True)
+@click.pass_context
+def workout_preview(ctx: click.Context, file_path: str, schedule_date: datetime,
+                    allow_update: bool, allow_same_day: bool) -> None:
+    """Preview normalized coaching intent and create/reuse/schedule decisions offline."""
+    try:
+        result = preview_workout(
+            _definition(file_path), schedule_date.date().isoformat(),
+            ctx.obj["state_path"], account_id=ctx.obj.get("account"),
+            allow_update=allow_update, allow_same_day=allow_same_day,
+        )
+    except (ValueError, WorkoutPublishError) as err:
+        raise click.ClickException(str(err)) from err
+    _emit(ctx, "workout.preview", result)
 
 
 @workout.command(name="list")

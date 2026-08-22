@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
+from datetime import date
+from pathlib import Path
 from typing import Any, Dict
 
 from garmin_health_data.workout_state import (
@@ -22,6 +27,165 @@ from garmin_health_data.workouts import (
 
 class WorkoutPublishError(RuntimeError):
     """Raised when safe idempotent publishing cannot continue."""
+
+
+def _preview_account(state: Dict[str, Any], requested: str | None) -> str:
+    if requested:
+        return str(requested)
+    if state.get("_sqlite_path"):
+        path = Path(state["_sqlite_path"])
+        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+            accounts = [str(row[0]) for row in connection.execute(
+                "SELECT DISTINCT account_id FROM workout_publication ORDER BY account_id"
+            )]
+    else:
+        accounts = sorted(str(key) for key in state.get("accounts", {}))
+    if len(accounts) != 1:
+        raise WorkoutPublishError(
+            "Preview requires --account unless training state contains exactly one account"
+        )
+    return accounts[0]
+
+
+def _same_day_conflicts(state: Dict[str, Any], account_id: str, key: str,
+                        date_str: str) -> list[Dict[str, Any]]:
+    if state.get("_sqlite_path"):
+        path = Path(state["_sqlite_path"])
+        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            return [dict(row) for row in connection.execute("""
+                SELECT s.schedule_id,COALESCE(d.definition_key,p.source_key) AS key,
+                       s.status FROM workout_schedule s
+                JOIN workout_publication p USING(publication_id)
+                LEFT JOIN workout_definition d USING(definition_id)
+                WHERE p.account_id=? AND s.calendar_date=?
+                  AND s.status!='unscheduled'
+                  AND COALESCE(d.definition_key,p.source_key)!=?
+                ORDER BY s.schedule_id
+            """, (account_id, date_str, key))]
+    account = state.get("accounts", {}).get(account_id, {})
+    return [{"schedule_id": item.get("garmin_schedule_id"),
+             "key": receipt_key.rsplit("@", 1)[0], "status": "verified"}
+            for receipt_key, item in account.get("schedules", {}).items()
+            if item.get("calendar_date") == date_str
+            and receipt_key.rsplit("@", 1)[0] != key]
+
+
+def _catalog_definition_hash(state: Dict[str, Any], key: str) -> str | None:
+    """Return the authoritative normalized catalog hash when the SQLite schema has it."""
+    if not state.get("_sqlite_path"):
+        return None
+    path = Path(state["_sqlite_path"])
+    with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+        columns = {row[1] for row in connection.execute(
+            "PRAGMA table_info(workout_definition)"
+        )}
+        if "normalized_json" not in columns:
+            return None
+        row = connection.execute(
+            "SELECT normalized_json FROM workout_definition WHERE definition_key=?",
+            (key,),
+        ).fetchone()
+    if row is None:
+        return None
+    return definition_hash(validate_definition(json.loads(row[0])))
+
+
+def _step_summary(steps: list[Dict[str, Any]], multiplier: int = 1) -> Dict[str, Any]:
+    result = {"structural_step_count": 0, "expanded_step_count": 0,
+              "timed_seconds": 0.0, "distance_meters": 0.0,
+              "lap_button_step_count": 0}
+    for step in steps:
+        result["structural_step_count"] += 1
+        if step["type"] == "repeat":
+            child = _step_summary(step["steps"], multiplier * int(step["count"]))
+            for field in result:
+                result[field] += child[field]
+            continue
+        result["expanded_step_count"] += multiplier
+        duration = step["duration"]
+        if duration["type"] == "time":
+            result["timed_seconds"] += multiplier * float(duration["seconds"])
+        elif duration["type"] == "distance":
+            result["distance_meters"] += multiplier * float(duration["meters"])
+        else:
+            result["lap_button_step_count"] += multiplier
+    result["timed_seconds"] = round(result["timed_seconds"], 3)
+    result["distance_meters"] = round(result["distance_meters"], 3)
+    return result
+
+
+def preview_workout(
+    definition: Dict[str, Any], date_str: str, state_path: str,
+    *, account_id: str | None = None, allow_update: bool = False,
+    allow_same_day: bool = False,
+) -> Dict[str, Any]:
+    """Resolve a domain-level publish/schedule plan without Garmin calls or writes."""
+    try:
+        calendar_date = date.fromisoformat(date_str).isoformat()
+    except (TypeError, ValueError) as error:
+        raise WorkoutPublishError("date must be YYYY-MM-DD") from error
+    normalized = validate_definition(definition)
+    workout = normalized["workout"]
+    key = workout["key"]
+    digest = definition_hash(normalized)
+    state = load_state(state_path)
+    resolved_account = _preview_account(state, account_id)
+    receipt = get_workout_receipt(state, resolved_account, key)
+    catalog_digest = _catalog_definition_hash(state, key)
+    schedule = get_schedule_receipt(state, resolved_account, key, calendar_date)
+    conflicts = _same_day_conflicts(state, resolved_account, key, calendar_date)
+    reasons = []
+    if receipt is None:
+        publication_action = "create"
+    elif receipt.get("definition_hash") == digest or catalog_digest == digest:
+        publication_action = "reuse"
+    elif allow_update:
+        publication_action = "update"
+    else:
+        publication_action = "blocked_definition_change"
+        reasons.append("existing workout key has a different definition")
+    if schedule:
+        schedule_action = "reuse"
+    elif publication_action == "blocked_definition_change":
+        schedule_action = "blocked"
+    else:
+        schedule_action = "create"
+    if conflicts and not allow_same_day and schedule_action == "create":
+        reasons.append("another workout is already scheduled on this date")
+    fingerprint_source = {
+        "account_id": resolved_account, "definition_hash": digest, "key": key,
+        "calendar_date": calendar_date, "allow_update": allow_update,
+        "allow_same_day": allow_same_day,
+    }
+    fingerprint = "sha256:" + hashlib.sha256(json.dumps(
+        fingerprint_source, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    return {
+        "schema_version": "1.0", "valid": True,
+        "normalized_definition": normalized,
+        "summary": {
+            "key": key, "name": workout["name"], "sport": workout["sport"],
+            "estimated_duration_seconds": workout["estimated_duration_seconds"],
+            **_step_summary(workout["steps"]),
+        },
+        "plan": {
+            "calendar_date": calendar_date,
+            "publication_action": publication_action,
+            "schedule_action": schedule_action,
+            "existing_garmin_workout_id": int(receipt["garmin_workout_id"]) if receipt else None,
+            "existing_garmin_schedule_id": int(schedule["garmin_schedule_id"]) if schedule else None,
+            "same_day_conflicts": conflicts,
+            "ready_to_execute": not reasons,
+            "blocking_reasons": reasons,
+            "operation_fingerprint": fingerprint,
+        },
+        "provenance": {
+            "definition_contract": "garmin-health-data/workouts schema v1",
+            "state_source": "training_state", "read_only": True,
+            "garmin_network_access": False, "garmin_payload_exposed": False,
+        },
+    }
 
 
 def reconcile_workout_state(client: Any, state_path: str) -> Dict[str, Any]:

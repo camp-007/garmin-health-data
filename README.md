@@ -348,6 +348,8 @@ targets are `open`, `heart_rate`, `heart_rate_zone`, `pace`, `power`, and
 # Offline and non-mutating
 garmin workout validate --file workout.json
 garmin workout --output json render --file workout.json
+garmin workout --state-db training_state.db --output json preview \
+  --file workout.json --date 2026-08-22
 
 # Create and inspect templates
 garmin workout create --file workout.json
@@ -373,6 +375,12 @@ returned before a failed read-back remain `pending_verification`; `reconcile` pe
 bounded read-back without creating remote objects. The old JSON backend remains
 available only when an explicit `.json` `--state-path` is supplied for compatibility.
 `--output json` returns a stable result envelope suitable for scripts.
+
+`preview` uses the same authoritative definition validator as `publish`, but performs
+no Garmin network calls and no state writes. It returns the normalized coaching
+definition, calculated step/time/distance totals, create/reuse/update and scheduling
+decisions, conflicts, blocking reasons, and a stable operation fingerprint. Garmin's
+private API payload remains internal to `render` and the publishing adapter.
 
 The legacy `upload` command accepts raw Garmin JSON for endpoint debugging. Prefer
 `create` or `publish` for normal use because they validate the public contract and

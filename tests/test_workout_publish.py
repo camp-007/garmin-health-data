@@ -1,16 +1,19 @@
 """Tests for receipt-backed idempotent workout publishing."""
 
 import sqlite3
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from garmin_health_data.workout_publish import (
     WorkoutPublishError,
+    preview_workout,
     publish_workout,
     reconcile_workout_state,
 )
 from garmin_health_data.workout_state import load_state
+from garmin_health_data.workouts import definition_hash, validate_definition
 
 
 def definition(seconds: int = 300) -> dict:
@@ -43,6 +46,48 @@ def client() -> MagicMock:
         "workout": {"workoutId": 42},
     }
     return result
+
+
+def test_preview_is_domain_level_and_read_only(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    before = Path(state_path).read_bytes()
+    result = preview_workout(definition(), "2026-08-22", state_path,
+                             account_id="95016052")
+    assert result["summary"]["timed_seconds"] == 300
+    assert result["summary"]["expanded_step_count"] == 1
+    assert result["plan"]["publication_action"] == "create"
+    assert result["plan"]["schedule_action"] == "create"
+    assert result["plan"]["ready_to_execute"] is True
+    assert result["provenance"]["garmin_payload_exposed"] is False
+    assert Path(state_path).read_bytes() == before
+
+
+def test_preview_reuses_matching_receipts_and_fingerprint_is_stable(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    digest = definition_hash(validate_definition(definition()))
+    with sqlite3.connect(state_path) as db:
+        db.execute("INSERT INTO workout_publication VALUES(1,1,'95016052','idempotent-poc',42,?,'verified',NULL,'now',NULL,NULL)", (digest,))
+        db.execute("INSERT INTO workout_schedule VALUES(1,1,'2026-08-22',99,'verified',NULL,'now',NULL,NULL)")
+        db.commit()
+    first = preview_workout(definition(), "2026-08-22", state_path)
+    second = preview_workout(definition(), "2026-08-22", state_path)
+    assert first["plan"]["publication_action"] == "reuse"
+    assert first["plan"]["schedule_action"] == "reuse"
+    assert first["plan"]["operation_fingerprint"] == second["plan"]["operation_fingerprint"]
+
+
+def test_preview_blocks_changed_definition_and_same_day_conflict(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    with sqlite3.connect(state_path) as db:
+        db.execute("INSERT INTO workout_definition VALUES(2,'other')")
+        db.execute("INSERT INTO workout_publication VALUES(1,1,'95016052','idempotent-poc',42,'old','verified',NULL,'now',NULL,NULL)")
+        db.execute("INSERT INTO workout_publication VALUES(2,2,'95016052','other',43,'other','verified',NULL,'now',NULL,NULL)")
+        db.execute("INSERT INTO workout_schedule VALUES(1,2,'2026-08-22',100,'verified',NULL,'now',NULL,NULL)")
+        db.commit()
+    result = preview_workout(definition(), "2026-08-22", state_path)
+    assert result["plan"]["publication_action"] == "blocked_definition_change"
+    assert result["plan"]["ready_to_execute"] is False
+    assert len(result["plan"]["same_day_conflicts"]) == 1
 
 
 def sqlite_state(tmp_path) -> str:
