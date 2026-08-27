@@ -1115,9 +1115,12 @@ class GarminProcessor(Processor):
             return True
         start = min(frame_times)
         end = max(frame_times)
-        if activity_trim.end_utc is not None and start >= activity_trim.end_utc:
+        # Laps and splits are aggregate records, so a record crossing the trim
+        # boundary cannot be retained as-is. Keep only records that finish
+        # within the trim window rather than preserving a partially stale lap.
+        if activity_trim.end_utc is not None and end > activity_trim.end_utc:
             return False
-        if activity_trim.start_utc is not None and end < activity_trim.start_utc:
+        if activity_trim.start_utc is not None and start < activity_trim.start_utc:
             return False
         return True
 
