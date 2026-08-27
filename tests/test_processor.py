@@ -37,6 +37,7 @@ from garmin_health_data.models import (
     StrengthSet,
     User,
 )
+from garmin_health_data.activity_trims import ActivityTrim
 from garmin_health_data.constants import SEMICIRCLES_TO_DEGREES
 from garmin_health_data.processor import GarminProcessor
 from garmin_health_data.processor_helpers import FileSet, upsert_model_instances
@@ -260,6 +261,71 @@ class TestProcessFitFile:
             .first()
         )
         assert refreshed.ts_data_available is True
+
+    def test_process_fit_file_applies_activity_trim(self, db_session: Session):
+        """Trimmed FIT records, paths, laps, and splits are not persisted."""
+        _seed_activity(db_session)
+        start = datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+        cutoff = start + timedelta(seconds=10)
+        records = [
+            _make_frame(
+                "record",
+                [
+                    _make_field("timestamp", start + timedelta(seconds=5)),
+                    _make_field("heart_rate", 140, "bpm"),
+                    _make_field("position_lat", 100),
+                    _make_field("position_long", 200),
+                ],
+            ),
+            _make_frame(
+                "record",
+                [
+                    _make_field("timestamp", cutoff + timedelta(seconds=1)),
+                    _make_field("heart_rate", 70, "bpm"),
+                    _make_field("position_lat", 300),
+                    _make_field("position_long", 400),
+                ],
+            ),
+        ]
+        before_lap = _make_frame(
+            "lap", [_make_field("start_time", start), _make_field("total_distance", 100)]
+        )
+        after_lap = _make_frame(
+            "lap",
+            [
+                _make_field("start_time", cutoff + timedelta(seconds=1)),
+                _make_field("total_distance", 200),
+            ],
+        )
+        before_split = _make_frame(
+            "split", [_make_field("start_time", start), _make_field("total_distance", 100)]
+        )
+        after_split = _make_frame(
+            "split",
+            [
+                _make_field("start_time", cutoff + timedelta(seconds=1)),
+                _make_field("total_distance", 200),
+            ],
+        )
+        processor = GarminProcessor(
+            FileSet(file_paths=[], files={}),
+            MagicMock(),
+            activity_trims={12345: ActivityTrim(end_utc=cutoff)},
+        )
+        with patch("garmin_health_data.processor.fitdecode") as mock_fitdecode:
+            mock_fitdecode.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
+            mock_fitdecode.FitReader.return_value = _mock_fit_reader(
+                records + [before_lap, after_lap, before_split, after_split]
+            )
+            processor._process_fit_file(Path(FIT_FILENAME), db_session)
+
+        assert db_session.scalar(select(func.count()).select_from(ActivityTsMetric)) == 3
+        path = db_session.execute(select(ActivityPath)).scalars().one()
+        assert path.path_json == [
+            [200 * SEMICIRCLES_TO_DEGREES, 100 * SEMICIRCLES_TO_DEGREES]
+        ]
+        assert db_session.scalar(select(func.count()).select_from(ActivityLapMetric)) == 1
+        assert db_session.scalar(select(func.count()).select_from(ActivitySplitMetric)) == 1
 
     def test_process_fit_file_reprocessing(self, db_session: Session):
         """

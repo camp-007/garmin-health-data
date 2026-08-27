@@ -24,6 +24,7 @@ from garmin_health_data.processor_helpers import Processor
 from garmin_health_data.processor_helpers import FileSet
 import click
 from garmin_health_data.processor_helpers import upsert_model_instances
+from garmin_health_data.activity_trims import ActivityTrim
 from garmin_health_data.constants import (
     GARMIN_DATA_REGISTRY,
     PR_TYPE_LABELS,
@@ -186,6 +187,7 @@ class GarminProcessor(Processor):
         """
         Initialize GarminProcessor with additional instance attributes.
         """
+        self._activity_trims = kwargs.pop("activity_trims", {})
         super().__init__(*args, **kwargs)
         self.user_id = None
         self.must_update_user = False
@@ -1099,6 +1101,25 @@ class GarminProcessor(Processor):
             click.echo(
                 f"Processed {len(exercise_records)} strength exercise aggregates."
             )
+
+    @staticmethod
+    def _fit_frame_in_trim(frame: Any, activity_trim: ActivityTrim) -> bool:
+        """Keep a FIT lap/split when its frame time overlaps the trim window."""
+        frame_times = []
+        for field in frame.fields:
+            if field.name in {"timestamp", "start_time", "end_time"} and isinstance(
+                field.value, datetime
+            ):
+                frame_times.append(field.value.replace(tzinfo=timezone.utc))
+        if not frame_times:
+            return True
+        start = min(frame_times)
+        end = max(frame_times)
+        if activity_trim.end_utc is not None and start >= activity_trim.end_utc:
+            return False
+        if activity_trim.start_utc is not None and end < activity_trim.start_utc:
+            return False
+        return True
 
     def _process_activity_hr_zones(
         self, file_path: Path, session: Session
@@ -3425,6 +3446,7 @@ class GarminProcessor(Processor):
             )
 
         activity_id = int(match.groups()[1])
+        activity_trim = self._activity_trims.get(activity_id)
 
         # Skip if the parent activity was deduped (issue #66): the activity
         # row was never inserted, so the existence check below would raise and
@@ -3520,7 +3542,9 @@ class GarminProcessor(Processor):
                             timestamp = timestamp + timedelta(seconds=fractional)
 
                         # Second pass: process all fields if timestamp was found.
-                        if timestamp is not None:
+                        if timestamp is not None and (
+                            activity_trim is None or activity_trim.contains(timestamp)
+                        ):
                             frame_lat = None
                             frame_lon = None
                             for field in frame.fields:
@@ -3551,6 +3575,10 @@ class GarminProcessor(Processor):
 
                     # Process split frames.
                     elif frame.name == "split":
+                        if activity_trim is not None and not self._fit_frame_in_trim(
+                            frame, activity_trim
+                        ):
+                            continue
                         split_idx += 1
                         split_type_value = None
 
@@ -3609,6 +3637,10 @@ class GarminProcessor(Processor):
 
                     # Process lap frames.
                     elif frame.name == "lap":
+                        if activity_trim is not None and not self._fit_frame_in_trim(
+                            frame, activity_trim
+                        ):
+                            continue
                         lap_idx += 1
 
                         # Process all fields.
