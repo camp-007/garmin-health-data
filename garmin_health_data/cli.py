@@ -33,6 +33,7 @@ from garmin_health_data.db import (
     initialize_database,
 )
 from garmin_health_data.extractor import extract as extract_data
+from garmin_health_data.activity_trims import load_activity_trims
 from garmin_health_data.lifecycle import (
     LockHeldError,
     acquire_lock,
@@ -220,6 +221,11 @@ def auth(email: Optional[str], password: Optional[str]):
     "older than DURATION (e.g., 90d, 6m, 1y). Runs after --downsample-older-than "
     "if both are given, so today's prune does not strand a bucket aggregation.",
 )
+@click.option(
+    "--activity-trim-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="JSON file mapping activity IDs to FIT trim windows.",
+)
 def extract(
     start_date: Optional[datetime],
     end_date: Optional[datetime],
@@ -232,6 +238,7 @@ def extract(
     downsample_older_than,
     downsample_grain: Optional[int],
     prune_older_than,
+    activity_trim_config: Optional[Path],
 ):
     """
     Extract Garmin Connect data and save to SQLite database.
@@ -247,6 +254,13 @@ def extract(
             fg="red",
         )
         raise click.Abort()
+
+    try:
+        activity_trims = load_activity_trims(
+            str(activity_trim_config) if activity_trim_config else None
+        )
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
     # Validate auto retention flag pairings: downsample requires both flags.
     # Single missing flag is a user error and aborts before any work.
@@ -597,7 +611,9 @@ def extract(
                     db_load_failed = False
                     try:
                         with get_session(db_path) as session:
-                            processor = GarminProcessor(file_set, session)
+                            processor = GarminProcessor(
+                                file_set, session, activity_trims=activity_trims
+                            )
                             processor.process_file_set(file_set, session)
                     except Exception as e:
                         click.secho(
