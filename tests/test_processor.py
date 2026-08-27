@@ -297,6 +297,14 @@ class TestProcessFitFile:
                 _make_field("total_distance", 200),
             ],
         )
+        crossing_lap = _make_frame(
+            "lap",
+            [
+                _make_field("start_time", cutoff - timedelta(seconds=1)),
+                _make_field("end_time", cutoff + timedelta(seconds=1)),
+                _make_field("total_distance", 300),
+            ],
+        )
         before_split = _make_frame(
             "split", [_make_field("start_time", start), _make_field("total_distance", 100)]
         )
@@ -307,6 +315,14 @@ class TestProcessFitFile:
                 _make_field("total_distance", 200),
             ],
         )
+        crossing_split = _make_frame(
+            "split",
+            [
+                _make_field("start_time", cutoff - timedelta(seconds=1)),
+                _make_field("end_time", cutoff + timedelta(seconds=1)),
+                _make_field("total_distance", 300),
+            ],
+        )
         processor = GarminProcessor(
             FileSet(file_paths=[], files={}),
             MagicMock(),
@@ -315,7 +331,15 @@ class TestProcessFitFile:
         with patch("garmin_health_data.processor.fitdecode") as mock_fitdecode:
             mock_fitdecode.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
             mock_fitdecode.FitReader.return_value = _mock_fit_reader(
-                records + [before_lap, after_lap, before_split, after_split]
+                records
+                + [
+                    before_lap,
+                    after_lap,
+                    crossing_lap,
+                    before_split,
+                    after_split,
+                    crossing_split,
+                ]
             )
             processor._process_fit_file(Path(FIT_FILENAME), db_session)
 
