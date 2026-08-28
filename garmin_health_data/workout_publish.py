@@ -229,6 +229,45 @@ def reconcile_workout_state(client: Any, state_path: str) -> Dict[str, Any]:
     return results
 
 
+def execute_additive_workout(
+    client: Any,
+    definition: Dict[str, Any],
+    date_str: str,
+    state_path: str,
+    operation_fingerprint: str,
+) -> Dict[str, Any]:
+    """Execute one exact create/reuse preview without replacement or date conflicts."""
+    account_id = getattr(client, "account_id", None)
+    if not account_id:
+        raise WorkoutPublishError("Authenticated client has no account identity")
+    preview = preview_workout(
+        definition, date_str, state_path, account_id=str(account_id)
+    )
+    plan = preview["plan"]
+    if operation_fingerprint != plan["operation_fingerprint"]:
+        raise WorkoutPublishError(
+            "Operation fingerprint does not match the current preview; preview again"
+        )
+    if not plan["ready_to_execute"]:
+        detail = "; ".join(plan["blocking_reasons"])
+        raise WorkoutPublishError(f"Workout operation is blocked: {detail}")
+    if plan["publication_action"] not in {"create", "reuse"}:
+        raise WorkoutPublishError(
+            "MVP execution permits only additive create/reuse publication actions"
+        )
+    if plan["schedule_action"] not in {"create", "reuse"}:
+        raise WorkoutPublishError(
+            "MVP execution permits only additive create/reuse schedule actions"
+        )
+    result = publish_workout(client, definition, date_str, state_path)
+    return {
+        **result,
+        "operation_fingerprint": plan["operation_fingerprint"],
+        "publication_action": plan["publication_action"],
+        "schedule_action": plan["schedule_action"],
+    }
+
+
 def publish_workout(
     client: Any,
     definition: Dict[str, Any],
@@ -248,12 +287,13 @@ def publish_workout(
 
     state = load_state(state_path)
     receipt = get_workout_receipt(state, account_id, key)
+    catalog_digest = _catalog_definition_hash(state, key)
     created = False
     updated = False
 
     if receipt:
         workout_id = int(receipt["garmin_workout_id"])
-        if receipt.get("definition_hash") != digest:
+        if receipt.get("definition_hash") != digest and catalog_digest != digest:
             if not allow_update:
                 raise WorkoutPublishError(
                     f"Workout key {key!r} already maps to Garmin workout {workout_id} "

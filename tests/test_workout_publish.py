@@ -8,6 +8,7 @@ import pytest
 
 from garmin_health_data.workout_publish import (
     WorkoutPublishError,
+    execute_additive_workout,
     preview_workout,
     publish_workout,
     reconcile_workout_state,
@@ -88,6 +89,72 @@ def test_preview_blocks_changed_definition_and_same_day_conflict(tmp_path):
     assert result["plan"]["publication_action"] == "blocked_definition_change"
     assert result["plan"]["ready_to_execute"] is False
     assert len(result["plan"]["same_day_conflicts"]) == 1
+
+
+def test_additive_execution_requires_current_preview_fingerprint(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    garmin = client()
+
+    with pytest.raises(WorkoutPublishError, match="preview again"):
+        execute_additive_workout(
+            garmin, definition(), "2026-08-22", state_path, "sha256:stale"
+        )
+
+    garmin.upload_workout.assert_not_called()
+    garmin.schedule_workout.assert_not_called()
+
+
+def test_additive_execution_creates_then_reuses_exact_operation(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    garmin = client()
+    fingerprint = preview_workout(
+        definition(), "2026-08-22", state_path, account_id=garmin.account_id
+    )["plan"]["operation_fingerprint"]
+
+    first = execute_additive_workout(
+        garmin, definition(), "2026-08-22", state_path, fingerprint
+    )
+    reuse_fingerprint = preview_workout(
+        definition(), "2026-08-22", state_path, account_id=garmin.account_id
+    )["plan"]["operation_fingerprint"]
+    second = execute_additive_workout(
+        garmin, definition(), "2026-08-22", state_path, reuse_fingerprint
+    )
+
+    assert first["publication_action"] == "create"
+    assert first["schedule_action"] == "create"
+    assert second["publication_action"] == "reuse"
+    assert second["schedule_action"] == "reuse"
+    garmin.upload_workout.assert_called_once()
+    garmin.schedule_workout.assert_called_once()
+
+
+def test_additive_execution_refuses_same_day_conflict(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    garmin = client()
+    with sqlite3.connect(state_path) as db:
+        db.execute("INSERT INTO workout_definition VALUES(2,'other')")
+        db.execute(
+            "INSERT INTO workout_publication VALUES(1,2,?,'other',43,'other','verified',NULL,'now',NULL,NULL)",
+            (garmin.account_id,),
+        )
+        db.execute("INSERT INTO workout_schedule VALUES(1,1,'2026-08-22',100,'verified',NULL,'now',NULL,NULL)")
+        db.commit()
+    preview = preview_workout(
+        definition(), "2026-08-22", state_path, account_id=garmin.account_id
+    )
+
+    with pytest.raises(WorkoutPublishError, match="already scheduled"):
+        execute_additive_workout(
+            garmin,
+            definition(),
+            "2026-08-22",
+            state_path,
+            preview["plan"]["operation_fingerprint"],
+        )
+
+    garmin.upload_workout.assert_not_called()
+    garmin.schedule_workout.assert_not_called()
 
 
 def sqlite_state(tmp_path) -> str:
