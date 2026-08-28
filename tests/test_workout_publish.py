@@ -104,6 +104,19 @@ def test_additive_execution_requires_current_preview_fingerprint(tmp_path):
     garmin.schedule_workout.assert_not_called()
 
 
+def test_unregistered_sqlite_definition_cannot_upload(tmp_path):
+    state_path = sqlite_state(tmp_path)
+    garmin = client()
+    unregistered = definition()
+    unregistered["workout"]["key"] = "unregistered-v1"
+
+    with pytest.raises(WorkoutPublishError, match="registered in the catalog"):
+        publish_workout(garmin, unregistered, "2026-08-22", state_path)
+
+    garmin.upload_workout.assert_not_called()
+    garmin.schedule_workout.assert_not_called()
+
+
 def test_additive_execution_creates_then_reuses_exact_operation(tmp_path):
     state_path = sqlite_state(tmp_path)
     garmin = client()

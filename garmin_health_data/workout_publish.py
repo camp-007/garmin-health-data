@@ -91,6 +91,18 @@ def _catalog_definition_hash(state: Dict[str, Any], key: str) -> str | None:
     return definition_hash(validate_definition(json.loads(row[0])))
 
 
+def _catalog_has_definition(state: Dict[str, Any], key: str) -> bool:
+    """Return whether SQLite coaching state contains the versioned definition key."""
+    if not state.get("_sqlite_path"):
+        return True
+    path = Path(state["_sqlite_path"])
+    with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+        row = connection.execute(
+            "SELECT 1 FROM workout_definition WHERE definition_key=?", (key,)
+        ).fetchone()
+    return row is not None
+
+
 def _step_summary(steps: list[Dict[str, Any]], multiplier: int = 1) -> Dict[str, Any]:
     result = {"structural_step_count": 0, "expanded_step_count": 0,
               "timed_seconds": 0.0, "distance_meters": 0.0,
@@ -286,6 +298,10 @@ def publish_workout(
         raise WorkoutPublishError("Authenticated client has no account identity")
 
     state = load_state(state_path)
+    if not _catalog_has_definition(state, key):
+        raise WorkoutPublishError(
+            f"Workout {key!r} must be registered in the catalog before publishing"
+        )
     receipt = get_workout_receipt(state, account_id, key)
     catalog_digest = _catalog_definition_hash(state, key)
     created = False
