@@ -1256,7 +1256,9 @@ class GarminExtractor:
     def _extract_activity_zones(
         self, activity_id: int, timestamp: str, data_type: str, method: Callable
     ) -> Optional[Path]:
-        """Fetch and save a dedicated activity-zone chart response."""
+        """
+        Fetch and save a dedicated activity-zone chart response.
+        """
         try:
             data = _with_retries(method, activity_id)
         except Exception as e:
