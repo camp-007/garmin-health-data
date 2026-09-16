@@ -108,20 +108,28 @@ _AUTH_PATH_MARKERS = (
 
 
 class BoundedArchiveError(RuntimeError):
-    """Raised when a bounded archive is unsafe, incomplete, or inconsistent."""
+    """
+    Raised when a bounded archive is unsafe, incomplete, or inconsistent.
+    """
 
 
 class SourceBindingError(BoundedArchiveError):
-    """Raised when the authenticated Garmin account does not match the binding."""
+    """
+    Raised when the authenticated Garmin account does not match the binding.
+    """
 
 
 class ArchivedResponseMissing(BoundedArchiveError):
-    """Raised when replay asks for a successful response absent from the archive."""
+    """
+    Raised when replay asks for a successful response absent from the archive.
+    """
 
 
 @dataclass(frozen=True)
 class CaptureResult:
-    """Result of extraction-only source capture."""
+    """
+    Result of extraction-only source capture.
+    """
 
     archive_dir: Path
     manifest_path: Path
@@ -131,7 +139,9 @@ class CaptureResult:
 
 @dataclass(frozen=True)
 class ReplayResult:
-    """Result of replay through the existing extractor and processor."""
+    """
+    Result of replay through the existing extractor and processor.
+    """
 
     archive_dir: Path
     staging_db_path: Path
@@ -189,7 +199,9 @@ def _safe_failure(failure: ExtractionFailure) -> Dict[str, str]:
 
 
 class _SourceRecorder:
-    """Temporarily instrument an authenticated Garmin client at its data boundary."""
+    """
+    Temporarily instrument an authenticated Garmin client at its data boundary.
+    """
 
     def __init__(
         self,
@@ -566,7 +578,9 @@ def _request_key(
 
 
 class _ArchivedGarminClient(GarminClient):
-    """Garmin client whose transport reads verified archive objects only."""
+    """
+    Garmin client whose transport reads verified archive objects only.
+    """
 
     def __init__(self, archive_dir: Path, manifest: Dict[str, Any]) -> None:
         super().__init__()
@@ -652,7 +666,8 @@ def replay_bounded_source(
     :param archive_dir: Directory containing a completed capture manifest and objects.
     :param staging_db_path: SQLite staging database to create or update.
     :param files_root: Optional existing extractor lifecycle root.
-    :param allow_incomplete: Process successful material from failed/unavailable categories.
+    :param allow_incomplete: Process successful material from failed/unavailable
+        categories.
     :return: Replay and processor outcomes.
     """
     archive_dir = Path(archive_dir)

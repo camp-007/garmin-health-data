@@ -1,4 +1,6 @@
-"""Tests for bounded source capture and offline replay."""
+"""
+Tests for bounded source capture and offline replay.
+"""
 
 import hashlib
 import io
@@ -23,7 +25,9 @@ from garmin_health_data.garmin_client import GarminClient
 
 
 class FakeTransportClient(GarminClient):
-    """Real Garmin API wrappers backed by deterministic in-memory responses."""
+    """
+    Real Garmin API wrappers backed by deterministic in-memory responses.
+    """
 
     def __init__(self, activities: List[Dict[str, Any]] | None = None) -> None:
         super().__init__()
