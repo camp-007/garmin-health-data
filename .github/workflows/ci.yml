@@ -26,8 +26,9 @@ jobs:
     - name: Install dependencies and check formatting
       run: |
         make venv
-        git fetch --no-tags https://github.com/diegoscarabelli/garmin-health-data.git main:refs/remotes/upstream/main
-        changed_python="$(git diff --name-only --diff-filter=ACMR upstream/main...HEAD -- '*.py')"
+        baseline="$(git tag --list 'tc-extractor-*' --sort=-creatordate | head -n 1)"
+        baseline="${baseline:-9c84373e6ef779bbbbffbb0277bbe9e721f94320}"
+        changed_python="$(git diff --name-only --diff-filter=ACMR "$baseline"...HEAD -- '*.py')"
         if [ -n "$changed_python" ]; then
           .venv/bin/python -m autoflake --check $changed_python
           .venv/bin/python -m docformatter --check $changed_python
