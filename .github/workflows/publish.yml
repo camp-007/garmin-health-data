@@ -6,6 +6,10 @@ on:
 
 jobs:
   publish:
+    # This workflow is inherited by public forks. Only the upstream repository owns
+    # the PyPI project and its release credential; fork releases are ordinary GitHub
+    # artifacts and must never attempt a PyPI upload.
+    if: github.repository == 'diegoscarabelli/garmin-health-data'
     runs-on: ubuntu-latest
 
     steps:

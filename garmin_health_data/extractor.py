@@ -15,7 +15,7 @@ import io
 from dataclasses import dataclass
 from datetime import timedelta, date
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 import click
 import pendulum
@@ -389,6 +389,7 @@ class GarminExtractor:
         end_date: date,
         ingest_dir: Path,
         data_types: Optional[List[str]] = None,
+        no_date_file_dates: Optional[Mapping[str, date]] = None,
     ) -> None:
         """
         Initialize the Garmin extractor with date range and target directory.
@@ -398,11 +399,17 @@ class GarminExtractor:
         :param ingest_dir: Directory to save extracted files.
         :param data_types: Optional list of data type names to extract (e.g., ['SLEEP',
             'HRV']). If None, extracts all available data types.
+        :param no_date_file_dates: Optional per-category observation dates used to stamp
+            current-state files during archive replay. Ordinary extraction defaults to
+            the requested end date.
         """
         self.start_date = start_date
         self.end_date = end_date
         self.ingest_dir = ingest_dir
         self.data_types = data_types
+        self.no_date_file_dates = (
+            no_date_file_dates if no_date_file_dates is not None else {}
+        )
         self.garmin_client = None
         self.user_id = None
         self.failures: List[ExtractionFailure] = []
@@ -853,7 +860,8 @@ class GarminExtractor:
                 if data_type.name == "USER_PROFILE":
                     data["full_name"] = self.garmin_client.full_name
 
-                return self._save_garmin_data(data, data_type, end_date)
+                file_date = self.no_date_file_dates.get(data_type.name, end_date)
+                return self._save_garmin_data(data, data_type, file_date)
             click.secho(
                 f"{data_type.emoji} {data_type.name}: No data available.",
                 fg="yellow",
@@ -1123,7 +1131,9 @@ class GarminExtractor:
         want_multisport = (
             self.data_types is None or "MULTISPORT_CHILDREN" in self.data_types
         )
-        want_hr_zones = self.data_types is None or "ACTIVITY_HR_ZONES" in self.data_types
+        want_hr_zones = (
+            self.data_types is None or "ACTIVITY_HR_ZONES" in self.data_types
+        )
         want_power_zones = (
             self.data_types is None or "ACTIVITY_POWER_ZONES" in self.data_types
         )
@@ -1215,7 +1225,11 @@ class GarminExtractor:
                     downloaded_files.append(children_file)
 
             for requested, data_type, method in (
-                (want_hr_zones, "ACTIVITY_HR_ZONES", self.garmin_client.get_activity_hr_zones),
+                (
+                    want_hr_zones,
+                    "ACTIVITY_HR_ZONES",
+                    self.garmin_client.get_activity_hr_zones,
+                ),
                 (
                     want_power_zones,
                     "ACTIVITY_POWER_ZONES",
