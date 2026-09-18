@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `garmin_health_data.weather.capture_activity_weather` helper for a caller-owned,
+  serialized Garmin session. It verifies account binding, checks caller authorization
+  before requests and archival, and archives a bounded response for offline normalization.
+  Disabled by default; extraction categories, authentication and SQLite schemas are unchanged.
+  Packaged as the Training Compass 2.14.2 extractor candidate; not yet published.
+
 ## [2.14.1] - 2026-08-16
 
 ### Fixed
