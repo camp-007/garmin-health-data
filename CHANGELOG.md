@@ -7,13 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.3] - 2026-10-02
+
+### Fixed
+
+- Preserve reviewed swimming pool display units in the existing supplemental metrics
+  table, including clearing a stale unit when a later source omits it. Pool length
+  remains in its existing source units; no extractor schema changes are introduced.
+- Route `virtual_ride` activity-list and multisport-leg summaries through the existing
+  cycling mapper so recorded power, cadence and elevation fields reach the cycling
+  aggregate table. Missing values remain missing; no schema or provider request changes.
+
+## [2.14.2] - 2026-09-18
+
 ### Added
 
 - Optional `garmin_health_data.weather.capture_activity_weather` helper for a caller-owned,
   serialized Garmin session. It verifies account binding, checks caller authorization
   before requests and archival, and archives a bounded response for offline normalization.
   Disabled by default; extraction categories, authentication and SQLite schemas are unchanged.
-  Packaged as the Training Compass 2.14.2 extractor candidate; not yet published.
+  Published as the Training Compass 2.14.2 fork release.
 
 ## [2.14.1] - 2026-08-16
 

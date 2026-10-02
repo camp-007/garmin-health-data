@@ -596,7 +596,11 @@ class GarminProcessor(Processor):
         # Process sport-specific metrics.
         if activity_type_key == "running":
             self._process_running_metrics(activity_data, activity_id, session)
-        elif "cycling" in activity_type_key or "biking" in activity_type_key:
+        elif (
+            activity_type_key == "virtual_ride"
+            or "cycling" in activity_type_key
+            or "biking" in activity_type_key
+        ):
             self._process_cycling_metrics(activity_data, activity_id, session)
         elif "swimming" in activity_type_key:
             self._process_swimming_metrics(activity_data, activity_id, session)
@@ -842,6 +846,38 @@ class GarminProcessor(Processor):
         :param activity_id: Activity ID for foreign key reference.
         :param session: SQLAlchemy Session object.
         """
+        # The list API records poolLength in centimeters and carries the athlete's
+        # display unit separately. Preserve reviewed units in the existing numeric
+        # supplemental table, including explicit NULL on missing/unknown updates.
+        # A scale of 1 means meters; 0.9144 means yards. No schema migration needed.
+        unit = activity_data.pop("unitOfPoolLength", None)
+        pool_unit_meters = None
+        if isinstance(unit, dict):
+            key = unit.get("unitKey")
+            expected = (
+                {"meter": 100, "yard": 91.44}.get(key) if isinstance(key, str) else None
+            )
+            factor = unit.get("factor")
+            if (
+                expected is not None
+                and type(factor) in (int, float)
+                and factor == expected
+            ):
+                pool_unit_meters = expected / 100
+        upsert_model_instances(
+            session=session,
+            model_instances=[
+                SupplementalActivityMetric(
+                    activity_id=activity_id,
+                    metric="pool_length_unit_meters",
+                    value=pool_unit_meters,
+                )
+            ],
+            conflict_columns=["activity_id", "metric"],
+            on_conflict_update=True,
+            update_columns=["value"],
+        )
+
         # Extract fields requiring custom mapping first (all nullable).
         swimming_metrics = {
             "avg_swim_cadence": activity_data.pop(
@@ -1104,7 +1140,9 @@ class GarminProcessor(Processor):
 
     @staticmethod
     def _fit_frame_in_trim(frame: Any, activity_trim: ActivityTrim) -> bool:
-        """Keep a FIT lap/split when its frame time overlaps the trim window."""
+        """
+        Keep a FIT lap/split when its frame time overlaps the trim window.
+        """
         frame_times = []
         for field in frame.fields:
             if field.name in {"timestamp", "start_time", "end_time"} and isinstance(
@@ -1124,16 +1162,16 @@ class GarminProcessor(Processor):
             return False
         return True
 
-    def _process_activity_hr_zones(
-        self, file_path: Path, session: Session
-    ) -> None:
-        """Process a dedicated heart-rate zone chart response."""
+    def _process_activity_hr_zones(self, file_path: Path, session: Session) -> None:
+        """
+        Process a dedicated heart-rate zone chart response.
+        """
         self._process_activity_zones(file_path, session, "heart_rate", "bpm")
 
-    def _process_activity_power_zones(
-        self, file_path: Path, session: Session
-    ) -> None:
-        """Process a dedicated power zone chart response."""
+    def _process_activity_power_zones(self, file_path: Path, session: Session) -> None:
+        """
+        Process a dedicated power zone chart response.
+        """
         self._process_activity_zones(file_path, session, "power", "watts")
 
     def _process_activity_zones(
@@ -1143,10 +1181,10 @@ class GarminProcessor(Processor):
         zone_type: str,
         boundary_unit: str,
     ) -> None:
-        """Replace one activity's normalized zone rows from an API snapshot."""
-        match = re.match(
-            r"^\d+_ACTIVITY_(?:HR|POWER)_ZONES_(\d+)_", file_path.name
-        )
+        """
+        Replace one activity's normalized zone rows from an API snapshot.
+        """
+        match = re.match(r"^\d+_ACTIVITY_(?:HR|POWER)_ZONES_(\d+)_", file_path.name)
         if not match:
             raise ValueError(f"Cannot parse activity ID from {file_path.name}.")
         activity_id = int(match.group(1))
@@ -2814,7 +2852,7 @@ class GarminProcessor(Processor):
         tk = (type_key or "").lower()
         if tk == "running":
             model, mapping = RunningAggMetrics, _MULTISPORT_RUNNING_AGG_MAP
-        elif "cycling" in tk or "biking" in tk:
+        elif tk == "virtual_ride" or "cycling" in tk or "biking" in tk:
             model, mapping = CyclingAggMetrics, _MULTISPORT_CYCLING_AGG_MAP
         elif "swimming" in tk:
             model, mapping = SwimmingAggMetrics, _MULTISPORT_SWIMMING_AGG_MAP
@@ -3707,9 +3745,7 @@ class GarminProcessor(Processor):
                 workout_description=fit_workout.get("wkt_description"),
                 sport=fit_workout.get("sport"),
                 sub_sport=fit_workout.get("sub_sport"),
-                step_count=fit_workout.get(
-                    "num_valid_steps", len(fit_workout_steps)
-                ),
+                step_count=fit_workout.get("num_valid_steps", len(fit_workout_steps)),
                 definition_json={
                     "workout": fit_workout,
                     "steps": fit_workout_steps,
