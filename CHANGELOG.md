@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.4] - 2026-10-03
+
+### Fixed
+
+- Prefer explicitly recorded FIT lap fields over decoder-expanded aliases with the
+  same name. This preserves the explicit measurement and avoids duplicate lap-metric
+  keys quarantining an otherwise valid daily group. Expanded fields remain available
+  when the explicit field is absent or null. No schema or provider request changes.
+
 ## [2.14.3] - 2026-10-02
 
 ### Fixed

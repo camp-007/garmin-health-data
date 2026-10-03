@@ -1923,6 +1923,50 @@ class TestProcessFitSubSecond:
         file_set = MagicMock(spec=FileSet)
         return GarminProcessor(file_set=file_set, session=MagicMock())
 
+    @pytest.mark.parametrize("explicit_first", [True, False])
+    def test_explicit_lap_metric_wins_over_expanded_alias(
+        self, db_session: Session, explicit_first
+    ):
+        _seed_activity(db_session)
+        explicit = _make_field("enhanced_avg_speed", 4.321, "m/s")
+        explicit.is_expanded = False
+        expanded = _make_field("enhanced_avg_speed", 4.32, "m/s")
+        expanded.is_expanded = True
+        fields = [explicit, expanded] if explicit_first else [expanded, explicit]
+        frames = [_make_frame("lap", fields), _make_frame("lap", fields)]
+        with patch("garmin_health_data.processor.fitdecode") as decoder:
+            decoder.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
+            decoder.FitReader.return_value = _mock_fit_reader(frames)
+            self._make_processor()._process_fit_file(Path(FIT_FILENAME), db_session)
+        db_session.commit()
+        rows = db_session.scalars(
+            select(ActivityLapMetric).order_by(ActivityLapMetric.lap_idx)
+        ).all()
+        assert [(r.lap_idx, r.name, r.value, r.units) for r in rows] == [
+            (1, "enhanced_avg_speed", 4.321, "m/s"),
+            (2, "enhanced_avg_speed", 4.321, "m/s"),
+        ]
+
+    @pytest.mark.parametrize("include_null_explicit", [True, False])
+    def test_expanded_lap_metric_remains_when_explicit_value_missing(
+        self, db_session: Session, include_null_explicit
+    ):
+        _seed_activity(db_session)
+        expanded = _make_field("enhanced_avg_speed", 4.32, "m/s")
+        expanded.is_expanded = True
+        fields = [expanded]
+        if include_null_explicit:
+            explicit = _make_field("enhanced_avg_speed", None, "m/s")
+            explicit.is_expanded = False
+            fields.append(explicit)
+        with patch("garmin_health_data.processor.fitdecode") as decoder:
+            decoder.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
+            decoder.FitReader.return_value = _mock_fit_reader([_make_frame("lap", fields)])
+            self._make_processor()._process_fit_file(Path(FIT_FILENAME), db_session)
+        db_session.commit()
+        row = db_session.scalars(select(ActivityLapMetric)).one()
+        assert (row.name, row.value, row.units) == ("enhanced_avg_speed", 4.32, "m/s")
+
     def test_fractional_timestamp_preserves_subsecond_precision(
         self, db_session: Session
     ):
