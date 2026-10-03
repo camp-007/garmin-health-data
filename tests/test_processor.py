@@ -263,7 +263,9 @@ class TestProcessFitFile:
         assert refreshed.ts_data_available is True
 
     def test_process_fit_file_applies_activity_trim(self, db_session: Session):
-        """Trimmed FIT records, paths, laps, and splits are not persisted."""
+        """
+        Trimmed FIT records, paths, laps, and splits are not persisted.
+        """
         _seed_activity(db_session)
         start = datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
         cutoff = start + timedelta(seconds=10)
@@ -288,7 +290,8 @@ class TestProcessFitFile:
             ),
         ]
         before_lap = _make_frame(
-            "lap", [_make_field("start_time", start), _make_field("total_distance", 100)]
+            "lap",
+            [_make_field("start_time", start), _make_field("total_distance", 100)],
         )
         after_lap = _make_frame(
             "lap",
@@ -306,7 +309,8 @@ class TestProcessFitFile:
             ],
         )
         before_split = _make_frame(
-            "split", [_make_field("start_time", start), _make_field("total_distance", 100)]
+            "split",
+            [_make_field("start_time", start), _make_field("total_distance", 100)],
         )
         after_split = _make_frame(
             "split",
@@ -343,13 +347,20 @@ class TestProcessFitFile:
             )
             processor._process_fit_file(Path(FIT_FILENAME), db_session)
 
-        assert db_session.scalar(select(func.count()).select_from(ActivityTsMetric)) == 3
+        assert (
+            db_session.scalar(select(func.count()).select_from(ActivityTsMetric)) == 3
+        )
         path = db_session.execute(select(ActivityPath)).scalars().one()
         assert path.path_json == [
             [200 * SEMICIRCLES_TO_DEGREES, 100 * SEMICIRCLES_TO_DEGREES]
         ]
-        assert db_session.scalar(select(func.count()).select_from(ActivityLapMetric)) == 1
-        assert db_session.scalar(select(func.count()).select_from(ActivitySplitMetric)) == 1
+        assert (
+            db_session.scalar(select(func.count()).select_from(ActivityLapMetric)) == 1
+        )
+        assert (
+            db_session.scalar(select(func.count()).select_from(ActivitySplitMetric))
+            == 1
+        )
 
     def test_process_fit_file_reprocessing(self, db_session: Session):
         """
@@ -1961,7 +1972,9 @@ class TestProcessFitSubSecond:
             fields.append(explicit)
         with patch("garmin_health_data.processor.fitdecode") as decoder:
             decoder.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
-            decoder.FitReader.return_value = _mock_fit_reader([_make_frame("lap", fields)])
+            decoder.FitReader.return_value = _mock_fit_reader(
+                [_make_frame("lap", fields)]
+            )
             self._make_processor()._process_fit_file(Path(FIT_FILENAME), db_session)
         db_session.commit()
         row = db_session.scalars(select(ActivityLapMetric)).one()

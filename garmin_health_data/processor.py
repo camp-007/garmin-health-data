@@ -3694,7 +3694,10 @@ class GarminProcessor(Processor):
                             if field.is_expanded is False and field.value is not None
                         }
                         for field in frame.fields:
-                            if field.is_expanded is True and field.name in explicit_names:
+                            if (
+                                field.is_expanded is True
+                                and field.name in explicit_names
+                            ):
                                 continue
                             if (
                                 field.name is not None
