@@ -263,7 +263,9 @@ class TestProcessFitFile:
         assert refreshed.ts_data_available is True
 
     def test_process_fit_file_applies_activity_trim(self, db_session: Session):
-        """Trimmed FIT records, paths, laps, and splits are not persisted."""
+        """
+        Trimmed FIT records, paths, laps, and splits are not persisted.
+        """
         _seed_activity(db_session)
         start = datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
         cutoff = start + timedelta(seconds=10)
@@ -288,7 +290,8 @@ class TestProcessFitFile:
             ),
         ]
         before_lap = _make_frame(
-            "lap", [_make_field("start_time", start), _make_field("total_distance", 100)]
+            "lap",
+            [_make_field("start_time", start), _make_field("total_distance", 100)],
         )
         after_lap = _make_frame(
             "lap",
@@ -306,7 +309,8 @@ class TestProcessFitFile:
             ],
         )
         before_split = _make_frame(
-            "split", [_make_field("start_time", start), _make_field("total_distance", 100)]
+            "split",
+            [_make_field("start_time", start), _make_field("total_distance", 100)],
         )
         after_split = _make_frame(
             "split",
@@ -343,13 +347,20 @@ class TestProcessFitFile:
             )
             processor._process_fit_file(Path(FIT_FILENAME), db_session)
 
-        assert db_session.scalar(select(func.count()).select_from(ActivityTsMetric)) == 3
+        assert (
+            db_session.scalar(select(func.count()).select_from(ActivityTsMetric)) == 3
+        )
         path = db_session.execute(select(ActivityPath)).scalars().one()
         assert path.path_json == [
             [200 * SEMICIRCLES_TO_DEGREES, 100 * SEMICIRCLES_TO_DEGREES]
         ]
-        assert db_session.scalar(select(func.count()).select_from(ActivityLapMetric)) == 1
-        assert db_session.scalar(select(func.count()).select_from(ActivitySplitMetric)) == 1
+        assert (
+            db_session.scalar(select(func.count()).select_from(ActivityLapMetric)) == 1
+        )
+        assert (
+            db_session.scalar(select(func.count()).select_from(ActivitySplitMetric))
+            == 1
+        )
 
     def test_process_fit_file_reprocessing(self, db_session: Session):
         """
@@ -1922,6 +1933,52 @@ class TestProcessFitSubSecond:
         """
         file_set = MagicMock(spec=FileSet)
         return GarminProcessor(file_set=file_set, session=MagicMock())
+
+    @pytest.mark.parametrize("explicit_first", [True, False])
+    def test_explicit_lap_metric_wins_over_expanded_alias(
+        self, db_session: Session, explicit_first
+    ):
+        _seed_activity(db_session)
+        explicit = _make_field("enhanced_avg_speed", 4.321, "m/s")
+        explicit.is_expanded = False
+        expanded = _make_field("enhanced_avg_speed", 4.32, "m/s")
+        expanded.is_expanded = True
+        fields = [explicit, expanded] if explicit_first else [expanded, explicit]
+        frames = [_make_frame("lap", fields), _make_frame("lap", fields)]
+        with patch("garmin_health_data.processor.fitdecode") as decoder:
+            decoder.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
+            decoder.FitReader.return_value = _mock_fit_reader(frames)
+            self._make_processor()._process_fit_file(Path(FIT_FILENAME), db_session)
+        db_session.commit()
+        rows = db_session.scalars(
+            select(ActivityLapMetric).order_by(ActivityLapMetric.lap_idx)
+        ).all()
+        assert [(r.lap_idx, r.name, r.value, r.units) for r in rows] == [
+            (1, "enhanced_avg_speed", 4.321, "m/s"),
+            (2, "enhanced_avg_speed", 4.321, "m/s"),
+        ]
+
+    @pytest.mark.parametrize("include_null_explicit", [True, False])
+    def test_expanded_lap_metric_remains_when_explicit_value_missing(
+        self, db_session: Session, include_null_explicit
+    ):
+        _seed_activity(db_session)
+        expanded = _make_field("enhanced_avg_speed", 4.32, "m/s")
+        expanded.is_expanded = True
+        fields = [expanded]
+        if include_null_explicit:
+            explicit = _make_field("enhanced_avg_speed", None, "m/s")
+            explicit.is_expanded = False
+            fields.append(explicit)
+        with patch("garmin_health_data.processor.fitdecode") as decoder:
+            decoder.FIT_FRAME_DATA = fitdecode.FIT_FRAME_DATA
+            decoder.FitReader.return_value = _mock_fit_reader(
+                [_make_frame("lap", fields)]
+            )
+            self._make_processor()._process_fit_file(Path(FIT_FILENAME), db_session)
+        db_session.commit()
+        row = db_session.scalars(select(ActivityLapMetric)).one()
+        assert (row.name, row.value, row.units) == ("enhanced_avg_speed", 4.32, "m/s")
 
     def test_fractional_timestamp_preserves_subsecond_precision(
         self, db_session: Session

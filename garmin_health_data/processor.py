@@ -3684,8 +3684,21 @@ class GarminProcessor(Processor):
                             continue
                         lap_idx += 1
 
-                        # Process all fields.
+                        # fitdecode can expand legacy fields into enhanced aliases
+                        # even when the FIT message explicitly supplies those fields.
+                        # Preserve the explicit measurement, independent of field
+                        # order; keep expanded values when no explicit value exists.
+                        explicit_names = {
+                            field.name
+                            for field in frame.fields
+                            if field.is_expanded is False and field.value is not None
+                        }
                         for field in frame.fields:
+                            if (
+                                field.is_expanded is True
+                                and field.name in explicit_names
+                            ):
+                                continue
                             if (
                                 field.name is not None
                                 and "unknown" not in field.name.lower()
