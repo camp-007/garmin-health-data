@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-10-03
+
+### Added
+
+- Version-two pool swimming definitions, validation, preview and Garmin rendering.
+  Preserve yard/meter pool and distance units, repeats, fixed rest versus send-offs,
+  supported stroke/drill/equipment selections and coaching notes. Existing running
+  and cycling definitions retain schema 1. No extraction schema changes.
+  Generated workouts still require live device acceptance; see `docs/pool-workouts.md`.
+
 ## [2.14.4] - 2026-10-03
 
 ### Fixed

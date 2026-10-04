@@ -267,7 +267,7 @@ The data lives in a single SQLite file (default `./garmin_data.db`). Query it wi
 | Command | What it does | Section |
 |---|---|---|
 | [`garmin auth`](#garmin-auth) | Log into Garmin Connect and store OAuth tokens. Run once per account. | [auth](#garmin-auth) |
-| [`garmin workout`](#garmin-workout) | Validate, render, publish, schedule, and manage structured running/cycling workouts. | [workout](#garmin-workout) |
+| [`garmin workout`](#garmin-workout) | Validate, render, publish, schedule, and manage structured running, cycling and pool-swim workouts. | [workout](#garmin-workout) |
 | [`garmin extract`](#garmin-extract) | Download data from Garmin Connect and load it into the SQLite database. The default workflow. Supports rolling-window auto retention via opt-in flags. | [extract](#garmin-extract) |
 | [`garmin info`](#garmin-info) | Show row counts, last-update dates, and DB size. Read-only. | [info](#garmin-info) |
 | [`garmin verify`](#garmin-verify) | Check schema integrity and run SQLite's `PRAGMA integrity_check`. Read-only. | [verify](#garmin-verify) |
@@ -295,6 +295,9 @@ mutation concurrently with another Garmin command because token refreshes rotate
 shared cached credentials.
 
 Definitions use a strict, versioned JSON contract rather than Garmin's private payload:
+
+Schema 1 covers running and cycling. See [pool workouts](docs/pool-workouts.md) for
+schema 2, explicit yard/meter units, swim attributes and fixed-rest/send-off semantics.
 
 ```json
 {
