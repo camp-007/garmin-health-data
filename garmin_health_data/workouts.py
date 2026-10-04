@@ -1,4 +1,6 @@
-"""Versioned coaching workout definitions and Garmin payload rendering."""
+"""
+Versioned coaching workout definitions and Garmin payload rendering.
+"""
 
 from __future__ import annotations
 
@@ -37,7 +39,9 @@ MAX_EXPANDED_STEPS = 100
 
 
 class WorkoutDefinitionError(ValueError):
-    """Raised when a coaching workout definition violates the contract."""
+    """
+    Raised when a coaching workout definition violates the contract.
+    """
 
 
 def _error(path: str, message: str) -> None:
@@ -77,7 +81,9 @@ def _integer(value: Any, path: str, minimum: int, maximum: int) -> int:
 
 
 def load_definition(path: str | Path) -> Dict[str, Any]:
-    """Load and validate a versioned workout definition from JSON."""
+    """
+    Load and validate a versioned workout definition from JSON.
+    """
     file_path = Path(path)
     try:
         raw = json.loads(file_path.read_text(encoding="utf-8"))
@@ -91,7 +97,13 @@ def load_definition(path: str | Path) -> Dict[str, Any]:
 
 
 def validate_definition(raw: Any) -> Dict[str, Any]:
-    """Validate and normalize the public schema-version-1 contract."""
+    """
+    Normalize schema-1 running/cycling or schema-2 pool definitions.
+    """
+    if isinstance(raw, dict) and raw.get("schema_version") == 2:
+        from .pool_workouts import validate_pool_definition
+
+        return validate_pool_definition(raw)
     root = _object(raw, "$ ".strip())
     _strict_keys(root, {"schema_version", "workout"}, "$")
     if root.get("schema_version") != SCHEMA_VERSION:
@@ -118,7 +130,9 @@ def validate_definition(raw: Any) -> Dict[str, Any]:
     family = workout.get("family")
     version = workout.get("version")
     if family is not None or version is not None:
-        if not isinstance(family, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", family):
+        if not isinstance(family, str) or not re.fullmatch(
+            r"[a-z0-9]+(?:-[a-z0-9]+)*", family
+        ):
             _error("$.workout.family", "must be a lowercase hyphenated identifier")
         if not isinstance(version, int) or isinstance(version, bool) or version < 1:
             _error("$.workout.version", "must be a positive integer")
@@ -161,12 +175,12 @@ def validate_definition(raw: Any) -> Dict[str, Any]:
             f"expands to {expanded} executable steps; maximum is {MAX_EXPANDED_STEPS}",
         )
     normalized_workout = {
-            "key": key.strip(),
-            "name": name.strip(),
-            "description": description,
-            "sport": sport,
-            "estimated_duration_seconds": estimate,
-            "steps": normalized_steps,
+        "key": key.strip(),
+        "name": name.strip(),
+        "description": description,
+        "sport": sport,
+        "estimated_duration_seconds": estimate,
+        "steps": normalized_steps,
     }
     if family is not None:
         normalized_workout["family"] = family
@@ -270,9 +284,7 @@ def _validate_target(raw: Any, path: str, sport: str) -> Dict[str, Any]:
     if kind == "pace":
         if sport != "running":
             _error(path, "pace targets are supported only for running")
-        _strict_keys(
-            target, {"type", "min_seconds_per_km", "max_seconds_per_km"}, path
-        )
+        _strict_keys(target, {"type", "min_seconds_per_km", "max_seconds_per_km"}, path)
         fastest = _positive_number(
             target.get("min_seconds_per_km"), f"{path}.min_seconds_per_km"
         )
@@ -333,8 +345,14 @@ def definition_hash(definition: Dict[str, Any]) -> str:
 
 
 def render_garmin_workout(definition: Dict[str, Any]) -> Dict[str, Any]:
-    """Translate a validated public definition into Garmin workout JSON."""
+    """
+    Translate a validated public definition into Garmin workout JSON.
+    """
     definition = validate_definition(definition)
+    if definition["schema_version"] == 2:
+        from .pool_workout_renderer import render_pool_workout
+
+        return render_pool_workout(definition)
     workout = definition["workout"]
     sport_id, display_order = SUPPORTED_SPORTS[workout["sport"]]
     sport = {

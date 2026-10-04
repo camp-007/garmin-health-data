@@ -1,10 +1,13 @@
-"""Idempotent create/update/schedule orchestration for coaching workouts."""
+"""
+Idempotent create/update/schedule orchestration for coaching workouts.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import sqlite3
+from .pool_workouts import summarize_pool_definition as _pool_summary
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict
@@ -26,7 +29,9 @@ from garmin_health_data.workouts import (
 
 
 class WorkoutPublishError(RuntimeError):
-    """Raised when safe idempotent publishing cannot continue."""
+    """
+    Raised when safe idempotent publishing cannot continue.
+    """
 
 
 def _preview_account(state: Dict[str, Any], requested: str | None) -> str:
@@ -35,9 +40,12 @@ def _preview_account(state: Dict[str, Any], requested: str | None) -> str:
     if state.get("_sqlite_path"):
         path = Path(state["_sqlite_path"])
         with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
-            accounts = [str(row[0]) for row in connection.execute(
-                "SELECT DISTINCT account_id FROM workout_publication ORDER BY account_id"
-            )]
+            accounts = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT account_id FROM workout_publication ORDER BY account_id"
+                )
+            ]
     else:
         accounts = sorted(str(key) for key in state.get("accounts", {}))
     if len(accounts) != 1:
@@ -47,39 +55,52 @@ def _preview_account(state: Dict[str, Any], requested: str | None) -> str:
     return accounts[0]
 
 
-def _same_day_conflicts(state: Dict[str, Any], account_id: str, key: str,
-                        date_str: str) -> list[Dict[str, Any]]:
+def _same_day_conflicts(
+    state: Dict[str, Any], account_id: str, key: str, date_str: str
+) -> list[Dict[str, Any]]:
     if state.get("_sqlite_path"):
         path = Path(state["_sqlite_path"])
         with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
             connection.row_factory = sqlite3.Row
-            return [dict(row) for row in connection.execute("""
-                SELECT s.schedule_id,COALESCE(d.definition_key,p.source_key) AS key,
-                       s.status FROM workout_schedule s
-                JOIN workout_publication p USING(publication_id)
-                LEFT JOIN workout_definition d USING(definition_id)
-                WHERE p.account_id=? AND s.calendar_date=?
-                  AND s.status!='unscheduled'
-                  AND COALESCE(d.definition_key,p.source_key)!=?
-                ORDER BY s.schedule_id
-            """, (account_id, date_str, key))]
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT s.schedule_id,COALESCE(d.definition_key,p.source_key) AS key, "
+                    "s.status FROM workout_schedule s "
+                    "JOIN workout_publication p USING(publication_id) "
+                    "LEFT JOIN workout_definition d USING(definition_id) "
+                    "WHERE p.account_id=? AND s.calendar_date=? "
+                    "AND s.status!='unscheduled' "
+                    "AND COALESCE(d.definition_key,p.source_key)!=? "
+                    "ORDER BY s.schedule_id",
+                    (account_id, date_str, key),
+                )
+            ]
     account = state.get("accounts", {}).get(account_id, {})
-    return [{"schedule_id": item.get("garmin_schedule_id"),
-             "key": receipt_key.rsplit("@", 1)[0], "status": "verified"}
-            for receipt_key, item in account.get("schedules", {}).items()
-            if item.get("calendar_date") == date_str
-            and receipt_key.rsplit("@", 1)[0] != key]
+    return [
+        {
+            "schedule_id": item.get("garmin_schedule_id"),
+            "key": receipt_key.rsplit("@", 1)[0],
+            "status": "verified",
+        }
+        for receipt_key, item in account.get("schedules", {}).items()
+        if item.get("calendar_date") == date_str
+        and receipt_key.rsplit("@", 1)[0] != key
+    ]
 
 
 def _catalog_definition_hash(state: Dict[str, Any], key: str) -> str | None:
-    """Return the authoritative normalized catalog hash when the SQLite schema has it."""
+    """
+    Return the authoritative normalized catalog hash when the SQLite schema has it.
+    """
     if not state.get("_sqlite_path"):
         return None
     path = Path(state["_sqlite_path"])
     with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
-        columns = {row[1] for row in connection.execute(
-            "PRAGMA table_info(workout_definition)"
-        )}
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(workout_definition)")
+        }
         if "normalized_json" not in columns:
             return None
         row = connection.execute(
@@ -92,7 +113,9 @@ def _catalog_definition_hash(state: Dict[str, Any], key: str) -> str | None:
 
 
 def _catalog_has_definition(state: Dict[str, Any], key: str) -> bool:
-    """Return whether SQLite coaching state contains the versioned definition key."""
+    """
+    Return whether SQLite coaching state contains the versioned definition key.
+    """
     if not state.get("_sqlite_path"):
         return True
     path = Path(state["_sqlite_path"])
@@ -104,9 +127,13 @@ def _catalog_has_definition(state: Dict[str, Any], key: str) -> bool:
 
 
 def _step_summary(steps: list[Dict[str, Any]], multiplier: int = 1) -> Dict[str, Any]:
-    result = {"structural_step_count": 0, "expanded_step_count": 0,
-              "timed_seconds": 0.0, "distance_meters": 0.0,
-              "lap_button_step_count": 0}
+    result = {
+        "structural_step_count": 0,
+        "expanded_step_count": 0,
+        "timed_seconds": 0.0,
+        "distance_meters": 0.0,
+        "lap_button_step_count": 0,
+    }
     for step in steps:
         result["structural_step_count"] += 1
         if step["type"] == "repeat":
@@ -128,11 +155,17 @@ def _step_summary(steps: list[Dict[str, Any]], multiplier: int = 1) -> Dict[str,
 
 
 def preview_workout(
-    definition: Dict[str, Any], date_str: str, state_path: str,
-    *, account_id: str | None = None, allow_update: bool = False,
+    definition: Dict[str, Any],
+    date_str: str,
+    state_path: str,
+    *,
+    account_id: str | None = None,
+    allow_update: bool = False,
     allow_same_day: bool = False,
 ) -> Dict[str, Any]:
-    """Resolve a domain-level publish/schedule plan without Garmin calls or writes."""
+    """
+    Resolve a domain-level publish/schedule plan without Garmin calls or writes.
+    """
     try:
         calendar_date = date.fromisoformat(date_str).isoformat()
     except (TypeError, ValueError) as error:
@@ -166,42 +199,65 @@ def preview_workout(
     if conflicts and not allow_same_day and schedule_action == "create":
         reasons.append("another workout is already scheduled on this date")
     fingerprint_source = {
-        "account_id": resolved_account, "definition_hash": digest, "key": key,
-        "calendar_date": calendar_date, "allow_update": allow_update,
+        "account_id": resolved_account,
+        "definition_hash": digest,
+        "key": key,
+        "calendar_date": calendar_date,
+        "allow_update": allow_update,
         "allow_same_day": allow_same_day,
     }
-    fingerprint = "sha256:" + hashlib.sha256(json.dumps(
-        fingerprint_source, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")).hexdigest()
+    fingerprint = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                fingerprint_source, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     return {
-        "schema_version": "1.0", "valid": True,
+        "schema_version": "1.0",
+        "valid": True,
         "normalized_definition": normalized,
         "summary": {
-            "key": key, "name": workout["name"], "sport": workout["sport"],
+            "key": key,
+            "name": workout["name"],
+            "sport": workout["sport"],
             "estimated_duration_seconds": workout["estimated_duration_seconds"],
-            **_step_summary(workout["steps"]),
+            **(
+                _pool_summary(normalized)
+                if normalized["schema_version"] == 2
+                else _step_summary(workout["steps"])
+            ),
         },
         "plan": {
             "calendar_date": calendar_date,
             "publication_action": publication_action,
             "schedule_action": schedule_action,
-            "existing_garmin_workout_id": int(receipt["garmin_workout_id"]) if receipt else None,
-            "existing_garmin_schedule_id": int(schedule["garmin_schedule_id"]) if schedule else None,
+            "existing_garmin_workout_id": (
+                int(receipt["garmin_workout_id"]) if receipt else None
+            ),
+            "existing_garmin_schedule_id": (
+                int(schedule["garmin_schedule_id"]) if schedule else None
+            ),
             "same_day_conflicts": conflicts,
             "ready_to_execute": not reasons,
             "blocking_reasons": reasons,
             "operation_fingerprint": fingerprint,
         },
         "provenance": {
-            "definition_contract": "garmin-health-data/workouts schema v1",
-            "state_source": "training_state", "read_only": True,
-            "garmin_network_access": False, "garmin_payload_exposed": False,
+            "definition_contract": f"garmin-health-data/workouts schema v{normalized['schema_version']}",
+            "state_source": "training_state",
+            "read_only": True,
+            "garmin_network_access": False,
+            "garmin_payload_exposed": False,
         },
     }
 
 
 def reconcile_workout_state(client: Any, state_path: str) -> Dict[str, Any]:
-    """Read back pending Garmin objects and transactionally mark verified ones."""
+    """
+    Read back pending Garmin objects and transactionally mark verified ones.
+    """
     account_id = getattr(client, "account_id", None)
     if not account_id:
         raise WorkoutPublishError("Authenticated client has no account identity")
@@ -219,24 +275,40 @@ def reconcile_workout_state(client: Any, state_path: str) -> Dict[str, Any]:
             verified = False
             error = f"{type(err).__name__}: {err}"
         status = "verified" if verified else "pending_verification"
-        record_workout(state, account_id, item["key"], item["garmin_workout_id"],
-                       item["definition_hash"], status, error)
+        record_workout(
+            state,
+            account_id,
+            item["key"],
+            item["garmin_workout_id"],
+            item["definition_hash"],
+            status,
+            error,
+        )
         results["publications"].append({**item, "status": status, "error": error})
     for item in pending["schedules"]:
         error = None
         try:
             remote = client.get_scheduled_workout_by_id(int(item["garmin_schedule_id"]))
             remote_workout = remote.get("workout") or {}
-            verified = (remote.get("calendarDate") == item["calendar_date"] and
-                        int(remote_workout.get("workoutId", 0)) == int(item["garmin_workout_id"]))
+            verified = remote.get("calendarDate") == item["calendar_date"] and int(
+                remote_workout.get("workoutId", 0)
+            ) == int(item["garmin_workout_id"])
             if not verified:
                 error = "Garmin schedule read-back did not match date and workout"
         except Exception as err:
             verified = False
             error = f"{type(err).__name__}: {err}"
         status = "verified" if verified else "pending_verification"
-        record_schedule(state, account_id, item["key"], item["calendar_date"],
-                        item["garmin_workout_id"], item["garmin_schedule_id"], status, error)
+        record_schedule(
+            state,
+            account_id,
+            item["key"],
+            item["calendar_date"],
+            item["garmin_workout_id"],
+            item["garmin_schedule_id"],
+            status,
+            error,
+        )
         results["schedules"].append({**item, "status": status, "error": error})
     return results
 
@@ -248,7 +320,9 @@ def execute_additive_workout(
     state_path: str,
     operation_fingerprint: str,
 ) -> Dict[str, Any]:
-    """Execute one exact create/reuse preview without replacement or date conflicts."""
+    """
+    Execute one exact create/reuse preview without replacement or date conflicts.
+    """
     account_id = getattr(client, "account_id", None)
     if not account_id:
         raise WorkoutPublishError("Authenticated client has no account identity")
@@ -287,7 +361,9 @@ def publish_workout(
     state_path: str,
     allow_update: bool = False,
 ) -> Dict[str, Any]:
-    """Create or reuse a workout, schedule it once, and verify both objects."""
+    """
+    Create or reuse a workout, schedule it once, and verify both objects.
+    """
     definition = validate_definition(definition)
     workout = definition["workout"]
     key = workout["key"]
@@ -318,7 +394,9 @@ def publish_workout(
             changed = client.update_workout(workout_id, payload)
             workout_id = int(changed.get("workoutId", workout_id))
             updated = True
-            record_workout(state, account_id, key, workout_id, digest, "pending_verification")
+            record_workout(
+                state, account_id, key, workout_id, digest, "pending_verification"
+            )
             save_state(state, state_path)
     else:
         uploaded = client.upload_workout(payload)
@@ -329,21 +407,37 @@ def publish_workout(
         created = True
         # Persist the assigned ID before read-back so a transient verification error
         # does not cause a retry to create a duplicate template.
-        record_workout(state, account_id, key, workout_id, digest, "pending_verification")
+        record_workout(
+            state, account_id, key, workout_id, digest, "pending_verification"
+        )
         save_state(state, state_path)
 
     try:
         verified_workout = client.get_workout_by_id(workout_id)
     except Exception as err:
-        record_workout(state, account_id, key, workout_id, digest,
-                       "pending_verification", f"{type(err).__name__}: {err}")
+        record_workout(
+            state,
+            account_id,
+            key,
+            workout_id,
+            digest,
+            "pending_verification",
+            f"{type(err).__name__}: {err}",
+        )
         raise WorkoutPublishError(
             f"Garmin workout {workout_id} exists in local receipts but read-back failed; "
             "resolve the account/network state before retrying"
         ) from err
     if int(verified_workout.get("workoutId", 0)) != workout_id:
-        record_workout(state, account_id, key, workout_id, digest,
-                       "pending_verification", "Garmin workout read-back returned a different ID")
+        record_workout(
+            state,
+            account_id,
+            key,
+            workout_id,
+            digest,
+            "pending_verification",
+            "Garmin workout read-back returned a different ID",
+        )
         raise WorkoutPublishError(
             f"Garmin workout read-back did not verify ID {workout_id}"
         )
@@ -358,8 +452,16 @@ def publish_workout(
         try:
             verified_schedule = client.get_scheduled_workout_by_id(schedule_id)
         except Exception as err:
-            record_schedule(state, account_id, key, date_str, workout_id, schedule_id,
-                            "pending_verification", f"{type(err).__name__}: {err}")
+            record_schedule(
+                state,
+                account_id,
+                key,
+                date_str,
+                workout_id,
+                schedule_id,
+                "pending_verification",
+                f"{type(err).__name__}: {err}",
+            )
             raise WorkoutPublishError(
                 f"Schedule receipt {schedule_key!r} points to Garmin schedule "
                 f"{schedule_id}, but read-back failed; refusing to create a duplicate"
@@ -373,7 +475,15 @@ def publish_workout(
             )
         schedule_id = int(schedule_id)
         scheduled = True
-        record_schedule(state, account_id, key, date_str, workout_id, schedule_id, "pending_verification")
+        record_schedule(
+            state,
+            account_id,
+            key,
+            date_str,
+            workout_id,
+            schedule_id,
+            "pending_verification",
+        )
         save_state(state, state_path)
         try:
             verified_schedule = client.get_scheduled_workout_by_id(schedule_id)
@@ -385,8 +495,16 @@ def publish_workout(
 
     actual_date = verified_schedule.get("calendarDate")
     if actual_date != date_str:
-        record_schedule(state, account_id, key, date_str, workout_id, schedule_id,
-                        "pending_verification", "Garmin schedule read-back returned a different date")
+        record_schedule(
+            state,
+            account_id,
+            key,
+            date_str,
+            workout_id,
+            schedule_id,
+            "pending_verification",
+            "Garmin schedule read-back returned a different date",
+        )
         raise WorkoutPublishError(
             f"Garmin schedule {schedule_id} read back with date {actual_date!r}, "
             f"expected {date_str!r}"
@@ -394,8 +512,16 @@ def publish_workout(
     scheduled_workout = verified_schedule.get("workout") or {}
     actual_workout_id = scheduled_workout.get("workoutId")
     if actual_workout_id is not None and int(actual_workout_id) != workout_id:
-        record_schedule(state, account_id, key, date_str, workout_id, schedule_id,
-                        "pending_verification", "Garmin schedule read-back returned a different workout")
+        record_schedule(
+            state,
+            account_id,
+            key,
+            date_str,
+            workout_id,
+            schedule_id,
+            "pending_verification",
+            "Garmin schedule read-back returned a different workout",
+        )
         raise WorkoutPublishError(
             f"Garmin schedule {schedule_id} points to workout {actual_workout_id}, "
             f"expected {workout_id}"
